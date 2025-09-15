@@ -124,7 +124,7 @@ def take_screenshot():
         return None
 
 def detect_display():
-    """Detect the correct display"""
+    #Detect the correct display
     displays = [':0', ':1', ':0.0', ':1.0']
     
     # Check which display is available
@@ -141,7 +141,7 @@ def detect_display():
     return ':0'
 
 def detect_xauthority():
-    """Detect Xauthority file location"""
+    #Detect Xauthority file location
     xauth_locations = [
         f'/run/user/{os.getuid()}/gdm/Xauthority',
         f'/home/{os.getlogin()}/.Xauthority',
