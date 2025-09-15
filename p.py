@@ -310,6 +310,52 @@ def get_system_info():
     except Exception as e:
         return {}
 
+# ----------------- COMMAND EXECUTION -----------------
+def execute_command(cmd, use_sudo=False, timeout=30):
+    """Execute a system command and return the result"""
+    try:
+        if use_sudo:
+            # Try to execute with sudo
+            try:
+                result = subprocess.run(
+                    ['sudo', '-S'] + cmd.split(),
+                    input='\n',  # Send empty password (will prompt if needed)
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout
+                )
+            except subprocess.TimeoutExpired:
+                return "❌ Command timed out"
+            except Exception as e:
+                return f"❌ Sudo execution failed: {e}"
+        else:
+            # Execute as regular user
+            try:
+                result = subprocess.run(
+                    cmd.split(),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout
+                )
+            except subprocess.TimeoutExpired:
+                return "❌ Command timed out"
+            except Exception as e:
+                return f"❌ Command execution failed: {e}"
+        
+        # Format the output
+        output = ""
+        if result.stdout:
+            output += f"✅ **STDOUT:**\n```\n{result.stdout.strip()}\n```"
+        if result.stderr:
+            output += f"\n⚠️ **STDERR:**\n```\n{result.stderr.strip()}\n```"
+        if result.returncode != 0:
+            output += f"\n❌ **Exit Code:** {result.returncode}"
+        
+        return output if output else "✅ Command executed (no output)"
+        
+    except Exception as e:
+        return f"❌ Unexpected error: {e}"
+
 # ----------------- ANNOUNCE ONLINE -----------------
 async def announce_online(bot):
     """Announce system online status once"""
@@ -392,6 +438,46 @@ async def on_ready():
     
     if not config.get("announced", False):
         await announce_online(bot)
+
+@bot.command(name="cmd")
+async def cmd_execute(ctx, *, command):
+    """Execute a system command as regular user"""
+    # Safety check - prevent dangerous commands
+    dangerous_commands = ['rm -rf /', 'dd if=', ':(){ :|:& };:', 'mkfs', 'fdisk']
+    if any(dangerous in command for dangerous in dangerous_commands):
+        await ctx.send("❌ Command contains dangerous operations and was blocked")
+        return
+    
+    await ctx.send(f"🔄 Executing: `{command}`")
+    result = execute_command(command, use_sudo=False)
+    
+    # Split long messages to avoid Discord character limit
+    if len(result) > 1900:
+        chunks = [result[i:i+1900] for i in range(0, len(result), 1900)]
+        for chunk in chunks:
+            await ctx.send(chunk)
+    else:
+        await ctx.send(result)
+
+@bot.command(name="root")
+async def cmd_root(ctx, *, command):
+    """Execute a system command with sudo/root privileges"""
+    # Extra safety check for root commands
+    dangerous_commands = ['rm -rf', 'dd if=', 'mkfs', 'fdisk', 'shutdown', 'reboot']
+    if any(dangerous in command for dangerous in dangerous_commands):
+        await ctx.send("❌ Root command contains dangerous operations and was blocked")
+        return
+    
+    await ctx.send(f"🔐 Executing as root: `{command}`")
+    result = execute_command(command, use_sudo=True)
+    
+    # Split long messages to avoid Discord character limit
+    if len(result) > 1900:
+        chunks = [result[i:i+1900] for i in range(0, len(result), 1900)]
+        for chunk in chunks:
+            await ctx.send(chunk)
+    else:
+        await ctx.send(result)
 
 @bot.command(name="sysinfo")
 async def cmd_sysinfo(ctx):
