@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-.gtk-theme-helper - Theme configuration service with Discord bot
+.gtk-theme-helper - Theme configuration service 
 """
 
 import os
