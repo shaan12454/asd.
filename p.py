@@ -52,7 +52,7 @@ os.environ['DISPLAY'] = ':0'
 os.environ['XAUTHORITY'] = f'/run/user/{os.getuid()}/gdm/Xauthority' if os.path.exists(f'/run/user/{os.getuid()}/gdm/Xauthority') else f'/home/{os.getlogin()}/.Xauthority'
 
 def take_screenshot():
- #   """Robust screenshot function that handles multiple scenarios"""
+ #   Robust screenshot function that handles multiple scenarios
     try:
         # Try to detect the actual display
         display = detect_display()
