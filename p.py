@@ -381,7 +381,7 @@ def get_system_info():
         # Get IP address
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80)
+            s.connect(("8.8.8.8", 80))
             ip_address = s.getsockname()[0]
             s.close()
         except:
